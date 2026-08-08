@@ -1,0 +1,21 @@
+[
+  {
+    "guid": "1dd662e3-27c3-4e43-bbfe-108509a0b84f",
+    "name": "Colorist",
+    "description": "Samples the dominant colour of frames across a video and renders them as a vertical-stripe movie barcode, stored beside the media and shown at the foot of the detail page.",
+    "overview": "Movie barcodes for your library.",
+    "owner": "nitramivel",
+    "category": "General",
+    "imageUrl": "",
+    "versions": [
+      {
+        "version": "0.1.0.0",
+        "changelog": "First release.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/nitramivel/jellyfin-colorist/releases/download/v0.1.0.0/colorist_0.1.0.0.zip",
+        "checksum": "05fefe67b6e116097abaddd19771f8b6",
+        "timestamp": "2026-08-08T22:39:27Z"
+      }
+    ]
+  }
+]

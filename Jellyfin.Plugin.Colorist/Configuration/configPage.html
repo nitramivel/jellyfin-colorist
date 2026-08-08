@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Colorist</title>
+</head>
+<body>
+<div id="ColoristConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+     data-require="emby-input,emby-button,emby-select,emby-checkbox">
+    <div data-role="content">
+        <div class="content-primary">
+
+            <style>
+                .colTabBar { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 1em 0 1.5em 0; }
+                .colTabBar .colTabButton { margin: 0; }
+                .colTabButton.colTabActive { background: #00a4dc; color: #fff; }
+                .colPanel { display: none; }
+                .colPanel.colPanelActive { display: block; }
+                .colNote {
+                    font-size: 0.88em; opacity: 0.7; margin: 0.35em 0 1.1em 0;
+                    line-height: 1.45;
+                }
+                .colCard {
+                    margin-top: 1.2em; padding: 1.1em 1.2em 1.2em;
+                    border: 1px solid rgba(255,255,255,0.10); border-radius: 10px;
+                    background: rgba(255,255,255,0.035);
+                }
+                .colCardTitle { font-weight: 600; margin-bottom: 0.5em; }
+                .colStatusLine { font-size: 0.92em; opacity: 0.8; margin-top: 0.6em; }
+                .colPreview {
+                    width: 100%; height: 90px; border-radius: 6px; margin-top: 0.8em;
+                    border: 1px solid rgba(255,255,255,0.12);
+                    image-rendering: pixelated; display: none;
+                }
+                .colGrid {
+                    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+                    gap: 0 1.4em;
+                }
+            </style>
+
+            <div class="colTabBar">
+                <button is="emby-button" type="button" class="raised colTabButton colTabActive" data-panel="colour">Colour</button>
+                <button is="emby-button" type="button" class="raised colTabButton" data-panel="sampling">Sampling</button>
+                <button is="emby-button" type="button" class="raised colTabButton" data-panel="output">Output</button>
+                <button is="emby-button" type="button" class="raised colTabButton" data-panel="run">Run</button>
+            </div>
+
+            <form id="ColoristConfigForm">
+
+                <!-- ================= COLOUR ================= -->
+                <div class="colPanel colPanelActive" data-panel="colour">
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="ColorStrategy">Colour algorithm</label>
+                        <select is="emby-select" id="ColorStrategy" name="ColorStrategy" class="emby-select">
+                            <option value="mediancut">Median cut (recommended)</option>
+                            <option value="kmeans">k-means</option>
+                            <option value="mean">Average</option>
+                        </select>
+                        <div class="fieldDescription colNote">
+                            <strong>Median cut</strong> groups each frame's colours into boxes and picks one — fast,
+                            repeatable, and the sensible default.
+                            <strong>k-means</strong> finds better-shaped groups on graded footage such as sunsets,
+                            at roughly thirty times the cost.
+                            <strong>Average</strong> is the naive one: it tends to brown, because a red coat against
+                            green leaves genuinely averages to mud. It is here to compare against.
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DominanceExponent">Dominance vs. vividness</label>
+                        <input is="emby-input" type="number" id="DominanceExponent" name="DominanceExponent"
+                               class="emby-input" min="0" max="2" step="0.05" />
+                        <div class="fieldDescription colNote">
+                            How much a colour's share of the frame counts against how vivid it is.
+                            <strong>0.0</strong> ignores area entirely and picks the most vivid patch, so one
+                            pixel of lens flare decides the stripe. Raising it tilts towards area; around
+                            <strong>1.5</strong> and above a large dull background starts winning over a small
+                            bright subject. <strong>0.6</strong> lets a small bright subject beat a large grey
+                            wall without letting a speck beat the subject.
+                        </div>
+                    </div>
+
+                    <div class="colGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ClusterCount">Clusters per frame</label>
+                            <input is="emby-input" type="number" id="ClusterCount" name="ClusterCount"
+                                   class="emby-input" min="2" max="64" step="1" />
+                            <div class="fieldDescription colNote">
+                                Too few blends distinct colours together; too many split one real colour across
+                                several groups and weaken each. 8 is a good default.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="BlackFloor">Black floor (0&ndash;128)</label>
+                            <input is="emby-input" type="number" id="BlackFloor" name="BlackFloor"
+                                   class="emby-input" min="0" max="128" step="1" />
+                            <div class="fieldDescription colNote">
+                                Pixels darker than this are ignored when choosing a colour. Mops up letterbox
+                                bars that survived cropping, and lets a night scene lit by one lamp read as
+                                the lamp. Frames with nothing above the floor still come out black.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ================= SAMPLING ================= -->
+                <div class="colPanel" data-panel="sampling">
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="Columns">Stripes per barcode</label>
+                        <input is="emby-input" type="number" id="Columns" name="Columns"
+                               class="emby-input" min="16" max="4000" step="1" />
+                        <div class="fieldDescription colNote">
+                            A fixed count, not a fixed interval &mdash; so a 22-minute episode and a 3-hour film
+                            produce comparable images, and each costs about the same to make. Short items
+                            automatically get fewer stripes rather than sampling the same second twice.
+                        </div>
+                    </div>
+
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="KeyframesOnly" name="KeyframesOnly" />
+                        <span>Sample keyframes only</span>
+                    </label>
+                    <div class="fieldDescription colNote">
+                        Much faster &mdash; often by an order of magnitude &mdash; because the decoder skips
+                        rebuilding the frames in between. Keyframes also tend to sit on cuts, which is where the
+                        colour changes. Turn off for exactly evenly spaced samples at full decoding cost.
+                    </div>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="CropMode">Letterboxing</label>
+                        <select is="emby-select" id="CropMode" name="CropMode" class="emby-select">
+                            <option value="0">None &mdash; sample the whole frame</option>
+                            <option value="1">Auto &mdash; detect black bars per item</option>
+                            <option value="2">Fixed &mdash; same crop for everything</option>
+                        </select>
+                        <div class="fieldDescription colNote">
+                            Black bars wash out every sample, so they are removed before the colour is measured.
+                            Auto probes each file a third of the way in &mdash; never at the start, where a fade
+                            from black would suggest cropping away the entire picture &mdash; and takes the
+                            reading the file agreed on most often. Any crop discarding more than 40% of an axis
+                            is rejected as implausible.
+                        </div>
+                    </div>
+
+                    <div id="FixedCropFields" class="colGrid" style="display:none;">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="FixedCropWidth">Crop width</label>
+                            <input is="emby-input" type="number" id="FixedCropWidth" name="FixedCropWidth" class="emby-input" min="0" step="2" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="FixedCropHeight">Crop height</label>
+                            <input is="emby-input" type="number" id="FixedCropHeight" name="FixedCropHeight" class="emby-input" min="0" step="2" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="FixedCropX">Crop X</label>
+                            <input is="emby-input" type="number" id="FixedCropX" name="FixedCropX" class="emby-input" min="0" step="2" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="FixedCropY">Crop Y</label>
+                            <input is="emby-input" type="number" id="FixedCropY" name="FixedCropY" class="emby-input" min="0" step="2" />
+                        </div>
+                    </div>
+
+                    <div class="colGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="HeadTrimPercent">Skip at start (%)</label>
+                            <input is="emby-input" type="number" id="HeadTrimPercent" name="HeadTrimPercent"
+                                   class="emby-input" min="0" max="40" step="0.1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="TailTrimPercent">Skip at end (%)</label>
+                            <input is="emby-input" type="number" id="TailTrimPercent" name="TailTrimPercent"
+                                   class="emby-input" min="0" max="40" step="0.1" />
+                        </div>
+                    </div>
+                    <div class="fieldDescription colNote">
+                        Credits are real footage, so the sampler will faithfully report five minutes of black as
+                        a black tail on every image. Trimming a percentage of the runtime is deliberately blunt:
+                        detecting black runs instead misfires on films that are genuinely dark, and quietly
+                        deleting the last eight minutes of one is worse than keeping some credits.
+                    </div>
+                </div>
+
+                <!-- ================= OUTPUT ================= -->
+                <div class="colPanel" data-panel="output">
+
+                    <div class="colGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="OutputWidth">Image width</label>
+                            <input is="emby-input" type="number" id="OutputWidth" name="OutputWidth"
+                                   class="emby-input" min="64" max="8000" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="OutputHeight">Image height</label>
+                            <input is="emby-input" type="number" id="OutputHeight" name="OutputHeight"
+                                   class="emby-input" min="16" max="2000" step="1" />
+                        </div>
+                    </div>
+
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="Smooth" name="Smooth" />
+                        <span>Blend between stripes</span>
+                    </label>
+                    <div class="fieldDescription colNote">
+                        Fades one stripe into the next instead of hard edges. Blending is done perceptually,
+                        so transitions do not pass through a dark seam the way naive blending does.
+                    </div>
+
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="WriteBesideMedia" name="WriteBesideMedia" />
+                        <span>Store the image next to the media file</span>
+                    </label>
+                    <div class="fieldDescription colNote">
+                        Writes <code>&lt;video filename&gt;-colorist.png</code> into the movie folder, or the
+                        season folder for episodes. The <code>-colorist</code> suffix is not one Jellyfin's
+                        scanner recognises, so the barcode will never be adopted as the item's poster or
+                        thumbnail. If the folder is read-only &mdash; common for bind mounts &mdash; the image
+                        goes to the plugin's data directory instead and still displays normally.
+                    </div>
+
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="ShowOnDetailPage" name="ShowOnDetailPage" />
+                        <span>Show the barcode at the foot of the detail page</span>
+                    </label>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DisplayHeight">Display height (px)</label>
+                        <input is="emby-input" type="number" id="DisplayHeight" name="DisplayHeight"
+                               class="emby-input" min="20" max="400" step="1" />
+                    </div>
+                </div>
+
+                <!-- ================= RUN ================= -->
+                <div class="colPanel" data-panel="run">
+
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="IncludeMovies" name="IncludeMovies" />
+                        <span>Include movies</span>
+                    </label>
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="IncludeEpisodes" name="IncludeEpisodes" />
+                        <span>Include episodes</span>
+                    </label>
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="ForceRegenerate" name="ForceRegenerate" />
+                        <span>Regenerate barcodes that already exist</span>
+                    </label>
+                    <div class="fieldDescription colNote">
+                        Off by default, so a run picks up only what is new. Turn it on after changing the colour
+                        algorithm or the trims, or the existing images will never be revisited.
+                    </div>
+
+                    <div class="colGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MaxConcurrency">Items at once (0 = auto)</label>
+                            <input is="emby-input" type="number" id="MaxConcurrency" name="MaxConcurrency"
+                                   class="emby-input" min="0" max="32" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="FfmpegThreads">ffmpeg threads (0 = auto)</label>
+                            <input is="emby-input" type="number" id="FfmpegThreads" name="FfmpegThreads"
+                                   class="emby-input" min="0" max="16" step="1" />
+                        </div>
+                    </div>
+                    <div class="fieldDescription colNote">
+                        Auto uses a quarter of the processors. Colorist also runs every ffmpeg at below-normal
+                        priority, so a viewer starting a transcode mid-run takes CPU back from the barcode job
+                        rather than queueing behind it.
+                    </div>
+
+                    <div class="colCard">
+                        <div class="colCardTitle">Generate now</div>
+                        <div class="fieldDescription colNote" style="margin-top:0">
+                            Queues the scheduled task. A full library is potentially hours of ffmpeg, so it runs
+                            in the background &mdash; watch it under Dashboard &rarr; Scheduled Tasks.
+                        </div>
+                        <button is="emby-button" type="button" id="ColoristRunAll" class="raised block">
+                            <span>Generate for the whole library</span>
+                        </button>
+                        <div id="ColoristRunStatus" class="colStatusLine"></div>
+                    </div>
+
+                    <div class="colCard">
+                        <div class="colCardTitle">Try one item</div>
+                        <div class="fieldDescription colNote" style="margin-top:0">
+                            Paste an item ID to build a single barcode with the current settings and see the
+                            result. Faster than running the library to find out whether you like the algorithm.
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ColoristPreviewId">Item ID</label>
+                            <input is="emby-input" type="text" id="ColoristPreviewId" class="emby-input"
+                                   placeholder="e.g. 6f3a1c2e4b5d6789abcdef0123456789" />
+                        </div>
+                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="raised block">
+                            <span>Build it</span>
+                        </button>
+                        <div id="ColoristPreviewStatus" class="colStatusLine"></div>
+                        <img id="ColoristPreviewImage" class="colPreview" alt="Barcode preview" />
+                    </div>
+                </div>
+
+                <br />
+                <button is="emby-button" type="submit" class="raised button-submit block">
+                    <span>Save</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = '1dd662e3-27c3-4e43-bbfe-108509a0b84f';
+            var page = document.querySelector('#ColoristConfigPage');
+
+            function selectPanel(name) {
+                var i;
+                var tabs = page.querySelectorAll('.colTabButton');
+                for (i = 0; i < tabs.length; i++) {
+                    tabs[i].classList.toggle('colTabActive', tabs[i].getAttribute('data-panel') === name);
+                }
+                var panels = page.querySelectorAll('.colPanel');
+                for (i = 0; i < panels.length; i++) {
+                    panels[i].classList.toggle('colPanelActive', panels[i].getAttribute('data-panel') === name);
+                }
+            }
+
+            function syncCropFields() {
+                var mode = page.querySelector('#CropMode').value;
+                page.querySelector('#FixedCropFields').style.display = mode === '2' ? '' : 'none';
+            }
+
+            function load() {
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    page.querySelector('#ColorStrategy').value = config.ColorStrategy || 'mediancut';
+                    page.querySelector('#DominanceExponent').value = config.DominanceExponent;
+                    page.querySelector('#ClusterCount').value = config.ClusterCount;
+                    page.querySelector('#BlackFloor').value = config.BlackFloor;
+
+                    page.querySelector('#Columns').value = config.Columns;
+                    page.querySelector('#KeyframesOnly').checked = config.KeyframesOnly;
+                    page.querySelector('#CropMode').value = String(config.CropMode);
+                    page.querySelector('#FixedCropWidth').value = config.FixedCropWidth;
+                    page.querySelector('#FixedCropHeight').value = config.FixedCropHeight;
+                    page.querySelector('#FixedCropX').value = config.FixedCropX;
+                    page.querySelector('#FixedCropY').value = config.FixedCropY;
+                    page.querySelector('#HeadTrimPercent').value = config.HeadTrimPercent;
+                    page.querySelector('#TailTrimPercent').value = config.TailTrimPercent;
+
+                    page.querySelector('#OutputWidth').value = config.OutputWidth;
+                    page.querySelector('#OutputHeight').value = config.OutputHeight;
+                    page.querySelector('#Smooth').checked = config.Smooth;
+                    page.querySelector('#WriteBesideMedia').checked = config.WriteBesideMedia;
+                    page.querySelector('#ShowOnDetailPage').checked = config.ShowOnDetailPage;
+                    page.querySelector('#DisplayHeight').value = config.DisplayHeight;
+
+                    page.querySelector('#IncludeMovies').checked = config.IncludeMovies;
+                    page.querySelector('#IncludeEpisodes').checked = config.IncludeEpisodes;
+                    page.querySelector('#ForceRegenerate').checked = config.ForceRegenerate;
+                    page.querySelector('#MaxConcurrency').value = config.MaxConcurrency;
+                    page.querySelector('#FfmpegThreads').value = config.FfmpegThreads;
+
+                    syncCropFields();
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            function numberOf(selector, fallback) {
+                var value = parseFloat(page.querySelector(selector).value);
+                return isNaN(value) ? fallback : value;
+            }
+
+            function save() {
+                Dashboard.showLoadingMsg();
+
+                // Re-fetched rather than held from load(), so that a setting this page
+                // does not render — one added by a newer build, or written by the API —
+                // is not blanked by saving from an older form.
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    config.ColorStrategy = page.querySelector('#ColorStrategy').value;
+                    config.DominanceExponent = numberOf('#DominanceExponent', 0.6);
+                    config.ClusterCount = numberOf('#ClusterCount', 8);
+                    config.BlackFloor = numberOf('#BlackFloor', 12);
+
+                    config.Columns = numberOf('#Columns', 1000);
+                    config.KeyframesOnly = page.querySelector('#KeyframesOnly').checked;
+                    config.CropMode = parseInt(page.querySelector('#CropMode').value, 10);
+                    config.FixedCropWidth = numberOf('#FixedCropWidth', 0);
+                    config.FixedCropHeight = numberOf('#FixedCropHeight', 0);
+                    config.FixedCropX = numberOf('#FixedCropX', 0);
+                    config.FixedCropY = numberOf('#FixedCropY', 0);
+                    config.HeadTrimPercent = numberOf('#HeadTrimPercent', 0.5);
+                    config.TailTrimPercent = numberOf('#TailTrimPercent', 4);
+
+                    config.OutputWidth = numberOf('#OutputWidth', 1920);
+                    config.OutputHeight = numberOf('#OutputHeight', 240);
+                    config.Smooth = page.querySelector('#Smooth').checked;
+                    config.WriteBesideMedia = page.querySelector('#WriteBesideMedia').checked;
+                    config.ShowOnDetailPage = page.querySelector('#ShowOnDetailPage').checked;
+                    config.DisplayHeight = numberOf('#DisplayHeight', 90);
+
+                    config.IncludeMovies = page.querySelector('#IncludeMovies').checked;
+                    config.IncludeEpisodes = page.querySelector('#IncludeEpisodes').checked;
+                    config.ForceRegenerate = page.querySelector('#ForceRegenerate').checked;
+                    config.MaxConcurrency = numberOf('#MaxConcurrency', 0);
+                    config.FfmpegThreads = numberOf('#FfmpegThreads', 1);
+
+                    return ApiClient.updatePluginConfiguration(pluginId, config);
+                }).then(function (result) {
+                    Dashboard.processPluginConfigurationUpdateResult(result);
+                }, function () {
+                    Dashboard.hideLoadingMsg();
+                    Dashboard.alert('Colorist settings could not be saved.');
+                });
+            }
+
+            page.addEventListener('pageshow', function () {
+                load();
+            });
+
+            page.querySelector('.colTabBar').addEventListener('click', function (event) {
+                var button = event.target.closest('.colTabButton');
+                if (button) {
+                    selectPanel(button.getAttribute('data-panel'));
+                }
+            });
+
+            page.querySelector('#CropMode').addEventListener('change', syncCropFields);
+
+            page.querySelector('#ColoristConfigForm').addEventListener('submit', function (event) {
+                event.preventDefault();
+                save();
+                return false;
+            });
+
+            page.querySelector('#ColoristRunAll').addEventListener('click', function () {
+                var status = page.querySelector('#ColoristRunStatus');
+                status.textContent = 'Queueing…';
+
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('Colorist/Generate')
+                }).then(function () {
+                    status.textContent = 'Queued. Progress appears under Dashboard → Scheduled Tasks.';
+                }, function () {
+                    status.textContent = 'Could not queue the task — see the server log.';
+                });
+            });
+
+            page.querySelector('#ColoristPreviewRun').addEventListener('click', function () {
+                var id = page.querySelector('#ColoristPreviewId').value.trim();
+                var status = page.querySelector('#ColoristPreviewStatus');
+                var image = page.querySelector('#ColoristPreviewImage');
+
+                if (!id) {
+                    status.textContent = 'Enter an item ID first.';
+                    return;
+                }
+
+                status.textContent = 'Sampling… this takes as long as ffmpeg takes.';
+                image.style.display = 'none';
+
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('Colorist/Generate/' + encodeURIComponent(id))
+                }).then(function () {
+                    status.textContent = 'Done.';
+                    // Cache-busted: the URL is otherwise identical to one the browser
+                    // may already hold from a previous attempt, and the whole point of
+                    // this button is to see what changed.
+                    image.src = ApiClient.getUrl('Colorist/Barcode/' + encodeURIComponent(id))
+                        + '?t=' + Date.now();
+                    image.style.display = 'block';
+                }, function () {
+                    status.textContent = 'Failed — check the item ID and the server log.';
+                });
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>

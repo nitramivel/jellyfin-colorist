@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.Colorist</RootNamespace>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(Version).0</AssemblyVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The whole of Core is written to be exercised without ffmpeg, without
+         SkiaSharp and without a Jellyfin server, because this machine has none
+         of the three. That only pays off if the tests can see it. -->
+    <InternalsVisibleTo Include="Jellyfin.Plugin.Colorist.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Configuration\configPage.html" />
+    <EmbeddedResource Include="Web\colorist.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pinned to the ABI the owner's server actually runs, matching Curator and
+         Concierge. Note what is NOT here: no imaging package. Jellyfin.Controller
+         does not carry SkiaSharp (it lives in the server's Jellyfin.Drawing.Skia,
+         which is not published for plugins), so taking a dependency would mean
+         shipping native binaries into a process that already has its own copy.
+         ffmpeg hands us raw rgb24 bytes and PngWriter emits the file, so there is
+         nothing left for an imaging library to do. -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
+  </ItemGroup>
+
+</Project>
