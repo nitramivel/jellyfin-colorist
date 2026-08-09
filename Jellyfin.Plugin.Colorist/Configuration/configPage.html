@@ -246,6 +246,12 @@
                         <label class="inputLabel inputLabelUnfocused" for="DisplayHeight">Display height (px)</label>
                         <input is="emby-input" type="number" id="DisplayHeight" name="DisplayHeight"
                                class="emby-input" min="20" max="400" step="1" />
+                        <div class="fieldDescription colNote">
+                            How tall the strip is at the foot of the page. It always spans the full width
+                            edge to edge, whatever the window size, so this is the only dimension worth
+                            setting. Around 60&ndash;120 reads as a band under the page; 200 and up reads as
+                            a feature. Takes effect on the next page load, not just the next restart.
+                        </div>
                     </div>
                 </div>
 

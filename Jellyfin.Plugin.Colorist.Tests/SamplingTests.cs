@@ -523,5 +523,43 @@ namespace Jellyfin.Plugin.Colorist.Tests
             // for anything that is not the client shell.
             Assert.Null(ScriptInjector.Patch(body));
         }
+
+        [Fact]
+        public void TheClientScriptIsActuallyEmbedded()
+        {
+            // Found by resource-name suffix at runtime, so a rename of the folder or
+            // the root namespace would break it silently — the symptom being a detail
+            // page that simply never shows a barcode.
+            Assert.NotEqual(0, ScriptInjector.ReadScript().Length);
+        }
+
+        [Fact]
+        public void TheDisplayHeightSettingCanReachTheScript()
+        {
+            // The height is substituted into the served script by regex. If the
+            // declaration in colorist.js is ever reworded — const instead of var, a
+            // different name, extra spacing — the substitution silently stops
+            // matching and the setting quietly does nothing. This pins the shape.
+            var script = ScriptInjector.ReadScript();
+
+            Assert.Matches(@"var DISPLAY_HEIGHT = \d+;", script);
+        }
+
+        [Fact]
+        public void TheStripIsAnchoredToThePageRootNotTheIndentedContent()
+        {
+            // .detailPageContent carries padding-left: 32.45vw on wide layouts, so
+            // anchoring there would indent the strip a third of the way across the
+            // screen instead of spanning the page.
+            var script = ScriptInjector.ReadScript();
+
+            var pageRoot = script.IndexOf(".itemDetailPage:not(.hide)", StringComparison.Ordinal);
+            var content = script.IndexOf("querySelector('.detailPageContent')", StringComparison.Ordinal);
+
+            Assert.True(pageRoot > 0, "the page root selector is missing");
+            Assert.True(
+                content < 0 || pageRoot < content,
+                "the page root must be preferred over the indented content container");
+        }
     }
 }
