@@ -187,12 +187,20 @@ namespace Jellyfin.Plugin.Colorist.Services
 
             var strategy = StrategyFactory.Create(configuration.ColorStrategy);
 
+            // No probe means no idea what colour space the file is in. Sampling without
+            // conversion is the right default there: applying a tone map to something
+            // that turns out to be SDR washes it out, and most libraries are SDR.
+            var toneMapping = configuration.ToneMapHdr && info.HasValue
+                ? info.Value.ToneMapping
+                : ToneMapping.None;
+
             var samples = await _sampler.SampleAsync(
                 mediaPath,
                 plan.Value,
                 crop,
                 configuration.KeyframesOnly,
                 Math.Clamp(configuration.FfmpegThreads, 0, 16),
+                toneMapping,
                 strategy,
                 configuration.ToColorOptions(),
                 cancellationToken).ConfigureAwait(false);

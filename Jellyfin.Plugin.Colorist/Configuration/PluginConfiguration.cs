@@ -101,6 +101,25 @@ namespace Jellyfin.Plugin.Colorist.Configuration
         /// <summary>Gets or sets the decoder thread cap per ffmpeg process. Zero lets ffmpeg decide.</summary>
         public int FfmpegThreads { get; set; } = 1;
 
+        /// <summary>
+        /// Gets or sets whether HDR and Dolby Vision sources are converted before
+        /// their colours are measured.
+        /// </summary>
+        /// <remarks>
+        /// On by default, and it matters more than it sounds. A PQ signal in BT.2020
+        /// primaries decoded straight to rgb24 is read as though it were sRGB: the
+        /// mid-tones land far too dark and the wide primaries collapse toward grey, so
+        /// every 4K HDR film produces a dim, muted strip that looks nothing like the
+        /// film. Dolby Vision profile 5 is worse still — with no HDR10 base layer it
+        /// decodes pink and green — and needs the RPU applied rather than merely tone
+        /// mapping.
+        /// <para>
+        /// Turn off only if the ffmpeg in use lacks the filters and the fallback
+        /// logging becomes noise.
+        /// </para>
+        /// </remarks>
+        public bool ToneMapHdr { get; set; } = true;
+
         /// <summary>Gets or sets whether existing barcodes are regenerated.</summary>
         public bool ForceRegenerate { get; set; }
 

@@ -196,17 +196,49 @@ namespace Jellyfin.Plugin.Colorist.Tests
                     < args.IndexOf("-i ", StringComparison.Ordinal));
         }
 
-        [Fact]
-        public void KeyframeModeAsksForTimestamps()
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void TheFrameRateIsAlwaysCapped(bool keyframesOnly)
         {
-            // Without showinfo there is no way to know where a keyframe sat, and
-            // stripes would be placed at the wrong point along the strip.
-            Assert.Contains("showinfo", FfmpegArguments.BuildSample("/m/f.mkv", Plan, null, true, 1), StringComparison.Ordinal);
+            // The regression that produced 157,791 samples for a 1,000-stripe barcode
+            // on a real 2160p WEB-DL. The rate filter used to be applied only when
+            // decoding every frame, trusting -skip_frame nokey to thin the stream in
+            // keyframe mode — and that trust was misplaced. The cap must be present in
+            // both modes so the work is bounded whatever the decoder does.
+            var args = FfmpegArguments.BuildSample("/m/f.mkv", Plan, null, keyframesOnly, 1);
+
+            Assert.Contains("fps=", args, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void EvenlySpacedModeUsesAnFpsFilterAndNeedsNoTimestamps()
+        public void TheRateCapMatchesTheRequestedStripeCount()
         {
+            // 500 stripes across a 600-second window is one frame every 1.2 seconds.
+            var args = FfmpegArguments.BuildSample("/m/f.mkv", Plan, null, true, 1);
+
+            Assert.Contains("fps=0.83333", args, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void ScalingHappensAfterTheRateCap()
+        {
+            // Resizing frames that are about to be dropped is pure waste.
+            var args = FfmpegArguments.BuildSample("/m/f.mkv", Plan, null, true, 1);
+
+            Assert.True(
+                args.IndexOf("fps=", StringComparison.Ordinal)
+                    < args.IndexOf("scale=", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void NoTimestampParsingIsRequestedInEitherMode()
+        {
+            // Positions are arithmetic now that the rate is capped, so showinfo — which
+            // emitted one stderr line per frame — is gone from both paths.
+            Assert.DoesNotContain("showinfo", FfmpegArguments.BuildSample("/m/f.mkv", Plan, null, true, 1), StringComparison.Ordinal);
+
             var args = FfmpegArguments.BuildSample("/m/f.mkv", Plan, null, keyframesOnly: false, 1);
 
             Assert.Contains("fps=", args, StringComparison.Ordinal);
@@ -279,33 +311,6 @@ namespace Jellyfin.Plugin.Colorist.Tests
         }
     }
 
-    public class ShowInfoParserTests
-    {
-        [Fact]
-        public void ReadsTimestampsInOrder()
-        {
-            var stderr = string.Join(
-                '\n',
-                "[Parsed_showinfo_1 @ 0x5] n:0 pts:0 pts_time:0 duration:1",
-                "[Parsed_showinfo_1 @ 0x5] n:1 pts:48 pts_time:2.002 duration:1",
-                "[Parsed_showinfo_1 @ 0x5] n:2 pts:96 pts_time:4.004 duration:1");
-
-            var times = ShowInfoParser.ParseTimestamps(stderr);
-
-            Assert.Equal(3, times.Count);
-            Assert.Equal(0, times[0]);
-            Assert.Equal(2.002, times[1], 3);
-            Assert.Equal(4.004, times[2], 3);
-        }
-
-        [Fact]
-        public void SurvivesEmptyAndIrrelevantOutput()
-        {
-            Assert.Empty(ShowInfoParser.ParseTimestamps(null));
-            Assert.Empty(ShowInfoParser.ParseTimestamps(string.Empty));
-            Assert.Empty(ShowInfoParser.ParseTimestamps("frame= 100 fps=25 q=-1.0 size=N/A"));
-        }
-    }
 
     public class ColumnBinnerTests
     {

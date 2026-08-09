@@ -17,7 +17,12 @@ namespace Jellyfin.Plugin.Colorist.Services
     /// <param name="Width">Coded width of the first video stream.</param>
     /// <param name="Height">Coded height of the first video stream.</param>
     /// <param name="DurationSeconds">Container duration, or zero if absent.</param>
-    public readonly record struct VideoInfo(int Width, int Height, double DurationSeconds);
+    /// <param name="ToneMapping">What conversion the colours need before sampling.</param>
+    public readonly record struct VideoInfo(
+        int Width,
+        int Height,
+        double DurationSeconds,
+        ToneMapping ToneMapping);
 
     /// <summary>
     /// Drives ffmpeg and turns its output into one colour per sampled frame.
@@ -111,6 +116,9 @@ namespace Jellyfin.Plugin.Colorist.Services
 
                 var width = 0;
                 var height = 0;
+                string? transferName = null;
+                int? dolbyVisionProfile = null;
+                var hasHdr10Base = false;
 
                 if (root.TryGetProperty("streams", out var streams)
                     && streams.ValueKind == JsonValueKind.Array)
@@ -126,6 +134,14 @@ namespace Jellyfin.Plugin.Colorist.Services
                         {
                             height = hv;
                         }
+
+                        if (stream.TryGetProperty("color_transfer", out var transfer)
+                            && transfer.ValueKind == JsonValueKind.String)
+                        {
+                            transferName = transfer.GetString();
+                        }
+
+                        ReadDolbyVision(stream, ref dolbyVisionProfile, ref hasHdr10Base);
 
                         if (width > 0 && height > 0)
                         {
@@ -153,11 +169,71 @@ namespace Jellyfin.Plugin.Colorist.Services
                     return null;
                 }
 
-                return new VideoInfo(width, height, duration);
+                return new VideoInfo(
+                    width,
+                    height,
+                    duration,
+                    ToneMappingPolicy.Decide(transferName, dolbyVisionProfile, hasHdr10Base));
             }
             catch (JsonException)
             {
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Pulls the Dolby Vision configuration out of a stream's side data.
+        /// </summary>
+        /// <remarks>
+        /// <c>dv_bl_signal_compatibility_id</c> is the field that decides whether the
+        /// base layer stands on its own. A value of 1 means the base is ordinary
+        /// HDR10 and any decoder produces a sane picture from it; 2 means SDR-
+        /// compatible; 4 means HLG. Zero — or the field being absent on a profile 5
+        /// stream — means there is no compatible base, and the RPU has to be applied
+        /// before the pixels mean anything.
+        /// </remarks>
+        private static void ReadDolbyVision(
+            JsonElement stream,
+            ref int? profile,
+            ref bool hasHdr10Base)
+        {
+            if (!stream.TryGetProperty("side_data_list", out var list)
+                || list.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (var entry in list.EnumerateArray())
+            {
+                // The ValueKind check is not redundant. TryGetInt32 throws
+                // InvalidOperationException when the element is not a number rather
+                // than returning false, so a container holding a string where a
+                // profile number belongs would take down the probe — and with it the
+                // item — instead of merely being ignored.
+                if (!entry.TryGetProperty("dv_profile", out var dv)
+                    || dv.ValueKind != JsonValueKind.Number
+                    || !dv.TryGetInt32(out var value))
+                {
+                    continue;
+                }
+
+                profile = value;
+
+                if (entry.TryGetProperty("dv_bl_signal_compatibility_id", out var compat)
+                    && compat.ValueKind == JsonValueKind.Number
+                    && compat.TryGetInt32(out var compatId))
+                {
+                    hasHdr10Base = compatId is 1 or 2 or 4;
+                }
+
+                // Profiles 7 and 8 always carry a base layer whether or not the
+                // compatibility field made it into the container.
+                if (value is 7 or 8)
+                {
+                    hasHdr10Base = true;
+                }
+
+                return;
             }
         }
 
@@ -210,6 +286,7 @@ namespace Jellyfin.Plugin.Colorist.Services
         /// <param name="crop">Crop to apply, if any.</param>
         /// <param name="keyframesOnly">Whether to decode only keyframes.</param>
         /// <param name="threads">Decoder thread cap.</param>
+        /// <param name="toneMapping">Colour conversion to apply before sampling.</param>
         /// <param name="strategy">The colour strategy.</param>
         /// <param name="options">Colour knobs.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
@@ -220,6 +297,7 @@ namespace Jellyfin.Plugin.Colorist.Services
             CropRect? crop,
             bool keyframesOnly,
             int threads,
+            ToneMapping toneMapping,
             IFrameColorStrategy strategy,
             ColorOptions options,
             CancellationToken cancellationToken)
@@ -232,28 +310,78 @@ namespace Jellyfin.Plugin.Colorist.Services
                 return Array.Empty<TimedSample>();
             }
 
-            var arguments = FfmpegArguments.BuildSample(mediaPath, plan, crop, keyframesOnly, threads);
             var colours = new List<Rgb>(plan.Columns);
+            var attempt = toneMapping;
+            FfmpegResult result = default;
 
-            var result = await _runner.RunAsync(
-                encoder,
-                arguments,
-                (stdout, token) => ConsumeFramesAsync(stdout, strategy, options, colours, token),
-                cancellationToken).ConfigureAwait(false);
+            // A ladder rather than one attempt, because both conversion chains depend
+            // on optional ffmpeg components — libplacebo for Dolby Vision, zscale for
+            // HDR10 — and when one is missing ffmpeg rejects the entire filter graph
+            // and emits nothing at all. Jellyfin's own builds carry both, but the
+            // encoder path can point at a distribution build that does not.
+            //
+            // Degrading costs a re-decode and yields a worse barcode. Not degrading
+            // yields no barcode, and an item silently skipped forever is the harder
+            // failure to notice.
+            while (true)
+            {
+                result = await RunSampleAsync(
+                    encoder, mediaPath, plan, crop, keyframesOnly, threads, attempt,
+                    strategy, options, colours, cancellationToken).ConfigureAwait(false);
+
+                if (colours.Count > 0)
+                {
+                    break;
+                }
+
+                var next = ToneMappingPolicy.Fallback(attempt);
+
+                if (next is null)
+                {
+                    break;
+                }
+
+                _logger.LogWarning(
+                    "Colorist: {Mode} conversion produced no frames for {Path} (ffmpeg exited {Code}); "
+                    + "falling back to {Next}. The ffmpeg in use may lack the required filter. Error: {Error}",
+                    attempt,
+                    mediaPath,
+                    result.ExitCode,
+                    next.Value,
+                    Tail(result.StandardError));
+
+                attempt = next.Value;
+            }
 
             if (colours.Count == 0)
             {
                 _logger.LogWarning(
-                    "Colorist: ffmpeg exited {Code} and produced no frames for {Path}",
+                    "Colorist: ffmpeg exited {Code} and produced no frames for {Path}. Error output: {Error}",
                     result.ExitCode,
-                    mediaPath);
+                    mediaPath,
+                    Tail(result.StandardError));
 
                 return Array.Empty<TimedSample>();
             }
 
-            return keyframesOnly
-                ? WithReportedTimes(colours, result.StandardError, plan)
-                : WithAssumedTimes(colours, plan);
+            if (attempt != toneMapping)
+            {
+                _logger.LogInformation(
+                    "Colorist: {Path} was sampled with {Actual} rather than {Wanted}; colours may be off",
+                    mediaPath,
+                    attempt,
+                    toneMapping);
+            }
+
+            // Positions are arithmetic, not reported. Every invocation now carries an
+            // fps filter, so the frames arriving on the pipe are evenly spaced across
+            // the sampled window by construction and frame N sits at N × interval.
+            //
+            // This replaced a showinfo-parsing path that paired each frame with a
+            // timestamp scraped from stderr, which was only ever needed because
+            // keyframes arrive at irregular positions. Capping the rate removes the
+            // irregularity and several thousand lines of stderr with it.
+            return WithUniformTimes(colours, plan);
         }
 
         /// <summary>
@@ -318,32 +446,52 @@ namespace Jellyfin.Plugin.Colorist.Services
             }
         }
 
-        private static IReadOnlyList<TimedSample> WithReportedTimes(
+        private async Task<FfmpegResult> RunSampleAsync(
+            string encoder,
+            string mediaPath,
+            SamplePlan plan,
+            CropRect? crop,
+            bool keyframesOnly,
+            int threads,
+            ToneMapping toneMapping,
+            IFrameColorStrategy strategy,
+            ColorOptions options,
             List<Rgb> colours,
-            string stderr,
-            SamplePlan plan)
+            CancellationToken cancellationToken)
         {
-            var times = ShowInfoParser.ParseTimestamps(stderr);
-            var samples = new List<TimedSample>(colours.Count);
+            // Cleared rather than reused, so a retry after a chain that emitted a few
+            // frames before failing cannot leave those frames stuck at the head of the
+            // strip, mixing two different colour conversions into one image.
+            colours.Clear();
 
-            for (var i = 0; i < colours.Count; i++)
-            {
-                // Falls back to an even spread if showinfo produced fewer lines than
-                // there were frames. That should not happen, but the failure mode if
-                // it did — stripes silently attributed to the wrong moment — is
-                // invisible in the output, so it is worth handling rather than
-                // indexing past the end.
-                var seconds = i < times.Count
-                    ? times[i]
-                    : plan.DurationSeconds * i / Math.Max(1, colours.Count);
+            var arguments = FfmpegArguments.BuildSample(
+                mediaPath, plan, crop, keyframesOnly, threads, toneMapping);
 
-                samples.Add(new TimedSample(seconds, colours[i]));
-            }
-
-            return samples;
+            return await _runner.RunAsync(
+                encoder,
+                arguments,
+                (stdout, token) => ConsumeFramesAsync(stdout, strategy, options, colours, token),
+                cancellationToken).ConfigureAwait(false);
         }
 
-        private static IReadOnlyList<TimedSample> WithAssumedTimes(List<Rgb> colours, SamplePlan plan)
+        /// <summary>The last few lines of ffmpeg's stderr, for a log message.</summary>
+        /// <remarks>
+        /// Truncated because a failing filter graph still produces a banner and a full
+        /// stream dump, and the useful sentence is always the last one.
+        /// </remarks>
+        private static string Tail(string? stderr)
+        {
+            if (string.IsNullOrWhiteSpace(stderr))
+            {
+                return "(none)";
+            }
+
+            var lines = stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            return string.Join(" | ", lines[Math.Max(0, lines.Length - 3)..]);
+        }
+
+        private static IReadOnlyList<TimedSample> WithUniformTimes(List<Rgb> colours, SamplePlan plan)
         {
             var samples = new List<TimedSample>(colours.Count);
             var interval = plan.DurationSeconds / Math.Max(1, colours.Count);

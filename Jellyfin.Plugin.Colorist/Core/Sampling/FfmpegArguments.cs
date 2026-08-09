@@ -78,7 +78,8 @@ namespace Jellyfin.Plugin.Colorist.Core.Sampling
             SamplePlan plan,
             CropRect? crop,
             bool keyframesOnly,
-            int threads)
+            int threads,
+            ToneMapping toneMapping = ToneMapping.None)
         {
             var builder = new StringBuilder();
             builder.Append("-hide_banner -nostdin ");
@@ -89,16 +90,16 @@ namespace Jellyfin.Plugin.Colorist.Core.Sampling
 
             if (keyframesOnly)
             {
-                // -skip_frame nokey makes the decoder throw away non-keyframes without
-                // reconstructing them, which is where the order-of-magnitude saving
-                // comes from: it is the inter-frame reconstruction that costs, not the
-                // reading. It has to precede -i because it configures the decoder.
+                // Asks the decoder to throw non-keyframes away without reconstructing
+                // them, which is where the potential saving is: inter-frame
+                // reconstruction is the expensive part, not reading. It must precede
+                // -i because it configures the decoder.
                 //
-                // The sample positions then land wherever the encoder put its
-                // keyframes rather than on an even grid. For a barcode that is a fair
-                // trade and arguably an improvement, since encoders place keyframes at
-                // cuts — but it does mean the timestamps have to be binned onto the
-                // output columns afterwards rather than assumed uniform.
+                // Treated purely as a hint. Observed on a real 2160p WEB-DL to have no
+                // effect at all — every frame still arrived — so nothing downstream
+                // depends on it working. When a decoder does honour it the decode gets
+                // cheaper; when it does not, the fps filter below still bounds the
+                // work, and the only cost is that the saving fails to materialise.
                 builder.Append("-skip_frame nokey ");
             }
 
@@ -123,32 +124,42 @@ namespace Jellyfin.Plugin.Colorist.Core.Sampling
                 filters.Add(crop.Value.ToFilter());
             }
 
-            if (!keyframesOnly)
-            {
-                var fps = plan.DurationSeconds > 0
-                    ? plan.Columns / plan.DurationSeconds
-                    : 1;
+            // The rate filter is unconditional, and that is the point.
+            //
+            // It was previously applied only when decoding every frame, on the
+            // assumption that -skip_frame nokey would thin the stream by itself in
+            // keyframe mode. On a real 2160p WEB-DL it did not: a 110-minute film
+            // delivered 157,791 frames for a 1,000-stripe barcode, so the decoder
+            // handed over every frame and each one was scaled and colour-clustered
+            // for nothing — roughly 158 times the necessary work.
+            //
+            // Whether that is a decoder that ignores AVDISCARD_NONKEY or something
+            // about that particular encode does not actually matter, because relying
+            // on the answer was the mistake. Capping the rate here bounds the work at
+            // the stripe count no matter what the decoder chooses to emit.
+            var fps = plan.DurationSeconds > 0
+                ? plan.Columns / plan.DurationSeconds
+                : 1;
 
-                filters.Add(string.Create(CultureInfo.InvariantCulture, $"fps={fps:0.#####}"));
+            filters.Add(string.Create(CultureInfo.InvariantCulture, $"fps={fps:0.#####}"));
+
+            switch (toneMapping)
+            {
+                case ToneMapping.DolbyVision:
+                    filters.Add(DolbyVisionChain);
+                    break;
+                case ToneMapping.Hdr:
+                    filters.Add(TonemapChain);
+                    break;
+                default:
+                    break;
             }
 
+            // Deliberately after the rate cap: scaling is per-frame work, and there is
+            // no reason to resize frames that are about to be dropped.
             filters.Add(string.Create(
                 CultureInfo.InvariantCulture,
                 $"scale={SampleWidth}:{SampleHeight}:flags=area"));
-
-            if (keyframesOnly)
-            {
-                // A raw video pipe carries pixels and nothing else — no container, no
-                // packet headers, no timestamps. With an even fps filter that is fine
-                // because frame N's position is known by arithmetic, but keyframes
-                // arrive wherever the encoder put them, and without their times there
-                // is no way to place a stripe at the right point along the strip.
-                // showinfo prints one line per frame to stderr, in output order, and
-                // pairing the Nth line with the Nth frame off the pipe recovers what
-                // rawvideo threw away. It must come last so the times reported are the
-                // times of the frames actually emitted.
-                filters.Add("showinfo");
-            }
 
             builder.Append("-vf ").Append(Quote(string.Join(',', filters))).Append(' ');
 
@@ -163,10 +174,67 @@ namespace Jellyfin.Plugin.Colorist.Core.Sampling
         /// <summary>Builds an ffprobe command reporting duration and frame size as JSON.</summary>
         /// <param name="inputPath">The video file.</param>
         /// <returns>Arguments for ffprobe.</returns>
+        /// <remarks>
+        /// Asks for whole streams rather than a field list because the Dolby Vision
+        /// profile arrives as stream side data, and the selector syntax for reaching
+        /// into a side-data list differs between ffprobe versions. The extra output is
+        /// a few kilobytes of JSON parsed once per item.
+        /// </remarks>
         public static string BuildProbe(string inputPath) =>
             "-hide_banner -loglevel error -print_format json -show_format "
-            + "-show_entries stream=width,height,codec_type -select_streams v:0 "
+            + "-show_streams -select_streams v:0 "
             + Quote(inputPath);
+
+        /// <summary>
+        /// Converts HDR to something the colour maths can be trusted on.
+        /// </summary>
+        /// <remarks>
+        /// <b>Without this, every HDR item produces a washed-out barcode.</b> A PQ
+        /// (<c>smpte2084</c>) signal in BT.2020 primaries decoded straight to rgb24 is
+        /// reinterpreted as though it were sRGB: PQ allocates its code values across a
+        /// range up to 10,000 nits, so ordinary mid-tones land far too dark, and wide
+        /// BT.2020 primaries read as narrow ones pull every colour toward the neutral
+        /// axis. The result is exactly the muted, dim strip observed on a 2160p
+        /// Dolby Vision film.
+        /// <para>
+        /// The chain linearises, tone maps with Hable, then converts to BT.709.
+        /// <c>desat=0</c> matters here: the filter's default desaturation of bright
+        /// highlights exists to keep them looking natural on screen, which is the
+        /// opposite of what a colour census wants.
+        /// </para>
+        /// <para>
+        /// Placed after the rate cap so only the frames actually kept are converted,
+        /// and before the downscale so the averaging happens in linear BT.709 rather
+        /// than in PQ, where a small highlight would drag the whole average up.
+        /// </para>
+        /// </remarks>
+        public const string TonemapChain =
+            "zscale=t=linear:npl=100,format=gbrpf32le,"
+            + "tonemap=tonemap=hable:desat=0,"
+            + "zscale=p=bt709:t=bt709:m=bt709:r=tv";
+
+        /// <summary>
+        /// Converts Dolby Vision profile 5, which the chain above cannot handle.
+        /// </summary>
+        /// <remarks>
+        /// <b>Profile 5 is not HDR10 with extra data on top — it is a different signal.</b>
+        /// Profiles 7 and 8.1 carry a conventional HDR10 base layer, so ffmpeg decodes
+        /// something meaningful whether or not it understands the Dolby Vision RPU,
+        /// and <see cref="TonemapChain"/> handles them correctly. Profile 5 has no
+        /// such base: its pixels are IPT-PQ-C2, and a decoder that treats them as
+        /// BT.2020 YCbCr produces the notorious pink-and-green picture. Tone mapping
+        /// that would faithfully convert nonsense.
+        /// <para>
+        /// libplacebo is the one filter in ffmpeg that reads the RPU and reconstructs
+        /// the intended image, via <c>apply_dolbyvision</c>. Jellyfin's own ffmpeg
+        /// builds carry it — it is what the server uses for Dolby Vision transcoding —
+        /// but a distribution build may not, which is why the caller falls back.
+        /// </para>
+        /// </remarks>
+        public const string DolbyVisionChain =
+            "libplacebo=apply_dolbyvision=true:tonemapping=bt.2390:"
+            + "colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv,"
+            + "format=rgb24";
 
         private static void AppendSeek(StringBuilder builder, double seconds)
         {

@@ -9,6 +9,14 @@
     "imageUrl": "",
     "versions": [
       {
+        "version": "0.1.1.0",
+        "changelog": "Fixes three problems found on a live server. The barcode image now displays: it is loaded by an <img> tag, which cannot send an Authorization header, so the endpoint answered every request with 401 and both the settings preview and the detail-page strip rendered as broken images \u2014 the access token now travels in the query string. Frame analysis is capped at the requested stripe count: -skip_frame nokey turned out to be only a hint, and a 110-minute 2160p film was delivering 157,791 frames for a 1,000-stripe barcode, so every frame was scaled and colour-clustered for nothing. HDR and Dolby Vision are converted before their colours are measured, rather than being decoded as though they were SDR \u2014 which read far too dark and far too grey, and made every 4K HDR title produce a muted strip. Dolby Vision profile 5, which has no HDR10 base layer and decodes pink and green, is converted with libplacebo so its metadata is actually applied; profiles 7 and 8 use the standard HDR path. If a required ffmpeg filter is missing, sampling falls back a step at a time and logs it rather than producing nothing.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/nitramivel/jellyfin-colorist/releases/download/v0.1.1.0/colorist_0.1.1.0.zip",
+        "checksum": "b92c43e4faad2f3d63add1dc3e4ce4ba",
+        "timestamp": "2026-08-09T01:00:48Z"
+      },
+      {
         "version": "0.1.0.0",
         "changelog": "First release.",
         "targetAbi": "10.11.0.0",

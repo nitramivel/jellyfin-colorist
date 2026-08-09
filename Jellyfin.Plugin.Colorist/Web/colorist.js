@@ -44,6 +44,29 @@
         return null;
     }
 
+    /*
+     * The same URL, but carrying the access token in the query string.
+     *
+     * Required for anything loaded by the browser rather than by ApiClient. An
+     * <img> issues a plain GET and cannot be given an Authorization header, so a
+     * [Authorize] endpoint answers it with 401 and the element renders as a broken
+     * image. ApiClient.ajax is unaffected — it attaches the header itself — which is
+     * why the Exists check works while the picture does not.
+     */
+    function imageUrl(path) {
+        if (!window.ApiClient || typeof window.ApiClient.getUrl !== 'function') {
+            return null;
+        }
+
+        var token = typeof window.ApiClient.accessToken === 'function'
+            ? window.ApiClient.accessToken()
+            : null;
+
+        return token
+            ? window.ApiClient.getUrl(path, { api_key: token })
+            : window.ApiClient.getUrl(path);
+    }
+
     function fetchJson(path) {
         if (!window.ApiClient || typeof window.ApiClient.ajax !== 'function') {
             return Promise.reject(new Error('no ApiClient'));
@@ -102,7 +125,7 @@
 
         var image = document.createElement('img');
         image.alt = 'Colour barcode';
-        image.src = apiUrl('Colorist/Barcode/' + encodeURIComponent(itemId));
+        image.src = imageUrl('Colorist/Barcode/' + encodeURIComponent(itemId));
         image.style.cssText = [
             'display: block',
             'width: 100%',

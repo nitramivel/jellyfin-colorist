@@ -123,9 +123,26 @@
                         <span>Sample keyframes only</span>
                     </label>
                     <div class="fieldDescription colNote">
-                        Much faster &mdash; often by an order of magnitude &mdash; because the decoder skips
-                        rebuilding the frames in between. Keyframes also tend to sit on cuts, which is where the
-                        colour changes. Turn off for exactly evenly spaced samples at full decoding cost.
+                        Asks the decoder to skip rebuilding the frames in between, which can be much faster.
+                        It is only a hint, though &mdash; some decoders and some files ignore it entirely and
+                        hand over every frame anyway, so treat any speed-up as a bonus rather than a promise.
+                        Either way the number of frames actually analysed is capped at the stripe count above,
+                        so leaving this on never costs you anything.
+                    </div>
+
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="ToneMapHdr" name="ToneMapHdr" />
+                        <span>Convert HDR and Dolby Vision before measuring colour</span>
+                    </label>
+                    <div class="fieldDescription colNote">
+                        Leave this on. An HDR file decoded as though it were SDR reads far too dark and far
+                        too grey, so every 4K HDR title produces a muted strip that looks nothing like the
+                        film. Dolby Vision <strong>profile 5</strong> is worse &mdash; with no HDR10 base layer
+                        it decodes pink and green &mdash; and is converted with libplacebo so the Dolby Vision
+                        metadata is actually applied. Profiles 7 and 8 carry a normal HDR10 base and go
+                        through the standard path. If the required filter is missing from your ffmpeg,
+                        Colorist falls back a step at a time and says so in the log rather than producing
+                        nothing.
                     </div>
 
                     <div class="selectContainer">
@@ -342,6 +359,7 @@
 
                     page.querySelector('#Columns').value = config.Columns;
                     page.querySelector('#KeyframesOnly').checked = config.KeyframesOnly;
+                    page.querySelector('#ToneMapHdr').checked = config.ToneMapHdr;
                     page.querySelector('#CropMode').value = String(config.CropMode);
                     page.querySelector('#FixedCropWidth').value = config.FixedCropWidth;
                     page.querySelector('#FixedCropHeight').value = config.FixedCropHeight;
@@ -387,6 +405,7 @@
 
                     config.Columns = numberOf('#Columns', 1000);
                     config.KeyframesOnly = page.querySelector('#KeyframesOnly').checked;
+                    config.ToneMapHdr = page.querySelector('#ToneMapHdr').checked;
                     config.CropMode = parseInt(page.querySelector('#CropMode').value, 10);
                     config.FixedCropWidth = numberOf('#FixedCropWidth', 0);
                     config.FixedCropHeight = numberOf('#FixedCropHeight', 0);
@@ -468,11 +487,19 @@
                     url: ApiClient.getUrl('Colorist/Generate/' + encodeURIComponent(id))
                 }).then(function () {
                     status.textContent = 'Done.';
-                    // Cache-busted: the URL is otherwise identical to one the browser
-                    // may already hold from a previous attempt, and the whole point of
-                    // this button is to see what changed.
-                    image.src = ApiClient.getUrl('Colorist/Barcode/' + encodeURIComponent(id))
-                        + '?t=' + Date.now();
+                    // The token has to travel in the query string. A browser loading
+                    // an <img> sends a plain GET and there is no way to attach an
+                    // Authorization header to it, so the endpoint's [Authorize] would
+                    // reject it with a 401 and the element would render as a broken
+                    // image — which is exactly what happened before this line.
+                    //
+                    // Cache-busted too: the URL is otherwise identical to one the
+                    // browser may already hold from an earlier attempt, and the whole
+                    // point of this button is to see what just changed.
+                    image.src = ApiClient.getUrl('Colorist/Barcode/' + encodeURIComponent(id), {
+                        api_key: ApiClient.accessToken(),
+                        t: Date.now()
+                    });
                     image.style.display = 'block';
                 }, function () {
                     status.textContent = 'Failed — check the item ID and the server log.';
