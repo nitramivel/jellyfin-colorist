@@ -36,8 +36,19 @@
                 /* Tabs are the one control here that is NOT an emby-button. A tab is
                    not a raised, pressable thing — it labels which panel you are
                    looking at — and Jellyfin's button theming fights that at every
-                   turn. Underline instead, which is what Curator settled on. */
-                .colTabs { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 1em 0 1.5em 0; }
+                   turn. Underline instead, which is what Curator and Concierge
+                   settled on; the values below are theirs, so the three plugins'
+                   settings read as one dashboard.
+
+                   The baseline under the whole bar is load-bearing rather than
+                   decoration: without it the active tab's 2px marker is a short line
+                   floating under one word with nothing to sit on, and the bar stops
+                   reading as tabs at all. `currentColor` for the marker rather than
+                   the accent, so it follows whatever theme the server is wearing. */
+                .colTabs {
+                    display: flex; flex-wrap: wrap; gap: 0.3em;
+                    margin: 1.4em 0 1.2em; border-bottom: 1px solid rgba(127,127,127,0.3);
+                }
                 .colTab {
                     background: none; border: 0; border-bottom: 2px solid transparent;
                     color: inherit; font: inherit; font-size: 1.02em;
@@ -171,21 +182,42 @@
                    narrow viewport still shrinks instead of scrolling sideways. */
                 #ColoristConfigPage .content-primary { max-width: 1280px; }
 
-                /* Every button except the tabs carries is="emby-button" and the
-                   class "raised", generated ones included — the attribute is what
-                   Jellyfin's button theming keys on, so a button without it renders
-                   bare. Removing it once, on the theory that generated buttons never
-                   upgrade and so should be matched, stripped the styling from the
-                   whole page: the upgrade is what adds behaviour, but the CSS
-                   applies from the attribute either way. Labels go in a <span>. */
+                /* Every button except the tabs carries is="emby-button", the class
+                   "raised" AND the class "emby-button" — generated ones included.
+                   Writing that last class out is the fix for buttons that rendered
+                   bare beside identically-classed ones: no CSS rule anywhere matches
+                   the is= attribute. Jellyfin's stylesheet hangs the entire geometry
+                   on `.emby-button` (border:0, border-radius, padding, and
+                   font-family/font-size:inherit), while `.raised` carries nothing but
+                   a background colour, so a button missing the class keeps the
+                   browser's native one — bevelled border, 13px Arial, square corners
+                   — sitting on a themed background. That is the ugly one, and the
+                   class is added at runtime by `document.registerElement`, the
+                   removed V0 custom-elements API, which reaches a current browser
+                   only through webcomponents.js and only for the elements it happens
+                   to see. Writing it into the markup makes the look independent of
+                   whether the upgrade ran, and cannot double up: emby-button's
+                   createdCallback opens with
+                   `if (this.classList.contains('emby-button')) return`. Keep is= as
+                   well — it is what supplies the behaviour when the upgrade does
+                   happen. Labels go in a <span>. */
 
-                /* The one irreversible control on the page, marked as such. */
+                /* The one irreversible control on the page, marked as such — on the
+                   card rather than on the button. A hard-coded red button was a
+                   second button style on a page that wants one, and a custom theme's
+                   `.raised { background: … !important }` flattened it anyway, so the
+                   resting state is an ordinary button and the alarm lives in the
+                   armed state, which also says what the next click will do.
+                   !important because that theme rule would otherwise win, and on
+                   colour too, or a theme's :hover writes dark text onto dark red. */
                 .colDanger {
                     border-color: rgba(229,57,53,0.45);
                     background: rgba(229,57,53,0.06);
                 }
-                .colDangerButton { background: #c62828; color: #fff; }
-                .colDangerButton.colArmed { background: #8e0000; }
+                #ColoristDeleteAll.colArmed {
+                    background: #8e0000 !important;
+                    color: #fff !important;
+                }
             </style>
 
             <div class="verticalSection">
@@ -213,7 +245,7 @@
                      the Run tab means past three action cards. One row, shared by
                      every tab. -->
                 <div id="ColoristSaveRow" class="colSaveRow">
-                    <button is="emby-button" type="submit" class="raised button-submit block">
+                    <button is="emby-button" type="submit" class="emby-button raised button-submit block">
                         <span>Save</span>
                     </button>
                 </div>
@@ -514,7 +546,7 @@
                             Queues the scheduled task. A full library is potentially hours of ffmpeg, so it runs
                             in the background &mdash; progress appears below as it goes.
                         </div>
-                        <button is="emby-button" type="button" id="ColoristRunAll" class="raised">
+                        <button is="emby-button" type="button" id="ColoristRunAll" class="emby-button raised">
                             <span>Generate for the whole library</span>
                         </button>
                         <div id="ColoristRunStatus" class="colStatusLine"></div>
@@ -554,7 +586,7 @@
                             <input is="emby-input" type="text" id="ColoristPreviewId" class="emby-input"
                                    placeholder="e.g. 6f3a1c2e4b5d6789abcdef0123456789" />
                         </div>
-                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="raised">
+                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="emby-button raised">
                             <span>Build it</span>
                         </button>
                         <div id="ColoristPreviewStatus" class="colStatusLine"></div>
@@ -583,7 +615,7 @@
                             barcode will need sampling again.
                         </div>
 
-                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="raised colDangerButton">
+                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="emby-button raised">
                             <span>Delete saved barcodes</span>
                         </button>
                         <div id="ColoristDeleteStatus" class="colStatusLine"></div>
@@ -1210,7 +1242,7 @@
                         + '<div class="listItemBodyText" data-run-title>' + runTitle(run) + '</div>'
                         + '<div class="listItemBodyText secondary" data-run-meta>' + runMeta(run) + '</div>'
                         + '</div>'
-                        + '<button is="emby-button" type="button" class="raised colRunToggle" '
+                        + '<button is="emby-button" type="button" class="emby-button raised colRunToggle" '
                         + 'data-id="' + escapeHtml(run.RunId) + '"><span>'
                         + (expandedRunId === run.RunId ? 'Hide' : 'Details') + '</span></button>'
                         + '</div>'

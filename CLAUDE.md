@@ -89,12 +89,32 @@ are debounced to five seconds precisely because nothing is reading the file duri
 run. `CurrentItem` is never persisted — it changes several times a second and is only
 ever read from the snapshot.
 
-**Every button carries `is="emby-button" class="raised"` — including generated ones.**
-Jellyfin's button theming keys on that attribute, so a button without it renders bare.
-Removing it once, on the theory that customized built-ins never upgrade inside
-`innerHTML` and so the static buttons should be matched to the generated ones, stripped
-the styling from the entire page: the upgrade supplies *behaviour*, but the CSS applies
-from the attribute whether or not it happened. Labels go in a `<span>`.
+**Every button carries `is="emby-button" class="emby-button raised"` — including
+generated ones.** The class is written out deliberately, and that third piece is what
+two earlier attempts at "make these buttons match" were missing. **No CSS rule
+anywhere matches the `is=` attribute.** Verified against the running 10.11 server's
+own stylesheets: `.emby-button` holds the entire geometry — `border:0`,
+`border-radius:.2em`, `padding:.9em 1em`, `font-family:inherit`, `font-size:inherit`,
+`font-weight:600` — and the theme's `.raised` holds one declaration,
+`background:#303030`. A button missing the class therefore keeps the browser's native
+button (bevelled border, 13px Arial, square corners) on a themed background, next to
+identically-authored buttons that look right; that is the whole of the "ugly button"
+bug. The class is added at runtime by `document.registerElement`, the **removed** V0
+custom-elements API, which reaches a current browser only via `webcomponents.js` and
+only for elements the polyfill happens to see — so whether any given button gets it is
+not something this page can rely on. Writing it into the markup cannot double up:
+`emby-button`'s `createdCallback` opens with
+`if (this.classList.contains('emby-button')) return`. Keep `is=` as well: it is what
+supplies the behaviour when the upgrade does happen. Labels go in a `<span>`.
+
+**The delete button is an ordinary button at rest.** It used to be hard-coded
+`#c62828`, which was a second button style on a page that wants one — and pointless
+besides, because a custom dashboard theme (Abyss, here, via Branding → Custom CSS)
+sets `.raised { background: … !important }` and flattened it anyway. The danger cue
+lives on the card (`.colDanger`) and in the armed state, which says what the next
+click will do; `#ColoristDeleteAll.colArmed` needs `!important` on both background
+*and* colour to beat such a theme, colour included or the theme's `:hover` writes dark
+text onto dark red.
 
 **The tabs are the exception, and are not buttons in the emby sense.** Plain
 `<button class="colTab" role="tab">`, underlined when active — a tab labels which
