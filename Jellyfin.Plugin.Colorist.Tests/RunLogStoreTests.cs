@@ -217,6 +217,89 @@ namespace Jellyfin.Plugin.Colorist.Tests
         }
 
         [Fact]
+        public void TheNewestRunLeadsEvenWhenAnOlderOneFinishedLater()
+        {
+            // The bug this replaced: ordering came from the file's modification
+            // time, which is when a run last wrote — effectively when it finished.
+            // A long run started early stops writing after a short one started
+            // late, so it sorted first despite being the older run.
+            var slowStart = DateTime.UtcNow.AddHours(-3);
+            var fastStart = DateTime.UtcNow.AddHours(-1);
+
+            var slow = new RunLogDocument
+            {
+                RunId = Guid.NewGuid(),
+                Kind = RunKind.Generate,
+                Status = RunStatus.Completed,
+                StartedAt = slowStart,
+                FinishedAt = DateTime.UtcNow,
+                Total = 1,
+                Completed = 1,
+            };
+
+            var fast = new RunLogDocument
+            {
+                RunId = Guid.NewGuid(),
+                Kind = RunKind.Generate,
+                Status = RunStatus.Completed,
+                StartedAt = fastStart,
+                FinishedAt = fastStart.AddMinutes(2),
+                Total = 1,
+                Completed = 1,
+            };
+
+            Directory.CreateDirectory(_store.BasePath);
+
+            // Written in the order they finished: the slow one last, which is what
+            // gives it the newer modification time.
+            Write(fast);
+            System.Threading.Thread.Sleep(20);
+            Write(slow);
+
+            var listed = _store.List(5);
+
+            Assert.Equal(fast.RunId, listed[0].RunId);
+            Assert.Equal(slow.RunId, listed[1].RunId);
+        }
+
+        private void Write(RunLogDocument document)
+        {
+            var name = document.StartedAt.ToUniversalTime()
+                    .ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
+                + "-" + document.RunId.ToString("N") + ".json";
+
+            File.WriteAllText(
+                Path.Combine(_store.BasePath, name),
+                System.Text.Json.JsonSerializer.Serialize(document));
+        }
+
+        [Fact]
+        public void ARunFileFromBeforeTheNameCarriedATimeIsStillFound()
+        {
+            // Written by 0.3.0.0, which named files by ID alone. It has to keep
+            // reading and listing, not vanish on upgrade.
+            var id = Guid.NewGuid();
+            var document = new RunLogDocument
+            {
+                RunId = id,
+                Kind = RunKind.Generate,
+                Status = RunStatus.Completed,
+                StartedAt = DateTime.UtcNow.AddMinutes(-5),
+                FinishedAt = DateTime.UtcNow,
+                Total = 1,
+                Completed = 1,
+            };
+
+            Directory.CreateDirectory(_store.BasePath);
+            File.WriteAllText(
+                Path.Combine(_store.BasePath, id.ToString("N") + ".json"),
+                System.Text.Json.JsonSerializer.Serialize(document));
+
+            Assert.NotNull(_store.Detail(id));
+            Assert.Contains(_store.List(5), r => r.RunId == id);
+        }
+
+        [Fact]
         public void TheListIsNewestFirstAndHonoursItsLimit()
         {
             for (var i = 0; i < 8; i++)

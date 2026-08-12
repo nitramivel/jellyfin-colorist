@@ -854,6 +854,19 @@
             var expandedRunId = null;
             var statusTimer = null;
             var wasRunning = false;
+            var renderedSignature = null;
+
+            /*
+             * Where the reader had scrolled to inside the open drawer.
+             *
+             * Remembered here rather than read off the DOM when a rebuild starts,
+             * because the rebuild that happens when a run ends is really two: one
+             * that replaces the table with "Loading…" while the finished document is
+             * refetched, and one that puts the table back. By the second there is no
+             * scroller left to read a position from, so a position read at rebuild
+             * time is always zero by then.
+             */
+            var drawerScrollTop = 0;
 
             function escapeHtml(value) {
                 return String(value === null || value === undefined ? '' : value)
@@ -1018,6 +1031,20 @@
                 }).join('');
             }
 
+            /*
+             * Only items that did something get a line, so on a delete run across a
+             * whole library this count sits far below the number walked. Kept as its
+             * own function because a live drawer has to refresh it in place.
+             */
+            function drawerProgressNote(detail) {
+                var items = detail.Items || [];
+
+                return detail.Completed > items.length
+                    ? items.length + ' of ' + detail.Completed
+                        + ' items had something to record; the rest had nothing to do.'
+                    : '';
+            }
+
             function runDrawer(run) {
                 if (expandedRunId !== run.RunId) { return ''; }
 
@@ -1043,18 +1070,96 @@
 
                 body += '<div class="colItemScroll"><table class="colItemTable">'
                     + '<thead><tr><th>Item</th><th>Outcome</th><th>Took</th><th>Detail</th></tr></thead>'
-                    + '<tbody>' + itemRows(items) + '</tbody></table></div>';
+                    + '<tbody data-run-body="' + escapeHtml(run.RunId) + '">'
+                    + itemRows(items) + '</tbody></table></div>';
 
-                // Only items that did something get a line, so on a delete run across
-                // a whole library the count here is far below the number walked.
-                if (detail.Completed > items.length) {
-                    body += '<div class="colDrawerNote">'
-                        + escapeHtml(items.length + ' of ' + detail.Completed
-                            + ' items had something to record; the rest had nothing to do.')
-                        + '</div>';
-                }
+                body += '<div class="colDrawerNote" data-run-progress="' + escapeHtml(run.RunId) + '">'
+                    + escapeHtml(drawerProgressNote(detail)) + '</div>';
 
                 return body + '</div>';
+            }
+
+            function runTitle(run) {
+                return escapeHtml(statusWord(run.Status)) + ' · '
+                    + escapeHtml(relativeTime(run.StartedAt));
+            }
+
+            function runMeta(run) {
+                var totals = run.Totals || {};
+                var meta = (run.Kind === 'delete' ? 'Delete' : 'Generate')
+                    + ' · ' + escapeHtml(run.Trigger || 'manual')
+                    + ' · ' + escapeHtml(formatDuration(run.DurationSeconds));
+
+                if (run.Kind === 'delete') {
+                    meta += ' · ' + (totals.FilesRemoved || 0) + ' files removed';
+                } else {
+                    meta += ' · ' + (totals.Generated || 0) + ' generated';
+                    if (totals.Failed) { meta += ', ' + totals.Failed + ' failed'; }
+                }
+
+                return meta;
+            }
+
+            /*
+             * What the list is made of, as opposed to what the numbers on it say.
+             *
+             * A live run changes its counts and its duration every couple of seconds
+             * while its shape — which runs exist, their status, which one is open —
+             * stays put. Rebuilding the markup for a number that moved is what threw
+             * the drawer's scroll position back to the top every two seconds, so the
+             * rebuild is now reserved for changes this signature can see.
+             */
+            function structureSignature() {
+                var parts = recentRuns.map(function (run) {
+                    return run.RunId + ':' + run.Status;
+                });
+
+                parts.push('open=' + (expandedRunId || ''));
+                parts.push('loaded=' + (expandedRunId && runDetails[expandedRunId] ? '1' : '0'));
+
+                return parts.join('|');
+            }
+
+            /*
+             * Updates the numbers without touching the structure.
+             *
+             * Text nodes and appended rows only: nothing here replaces an element the
+             * user might be scrolled inside, have selected text in, or have a finger
+             * on. New item rows are appended to the table body rather than the body
+             * being rewritten, so a drawer open on a live run grows underneath the
+             * scroll position instead of resetting it.
+             */
+            function patchRuns() {
+                recentRuns.forEach(function (run) {
+                    var row = page.querySelector('[data-run-row="' + run.RunId + '"]');
+                    if (!row) { return; }
+
+                    var title = row.querySelector('[data-run-title]');
+                    var meta = row.querySelector('[data-run-meta]');
+
+                    if (title) { title.innerHTML = runTitle(run); }
+                    if (meta) { meta.innerHTML = runMeta(run); }
+                });
+
+                if (!expandedRunId) { return; }
+
+                var detail = runDetails[expandedRunId];
+                var body = page.querySelector('[data-run-body="' + expandedRunId + '"]');
+
+                if (!detail || !body) { return; }
+
+                var items = detail.Items || [];
+                var already = body.children.length;
+
+                if (items.length > already) {
+                    body.insertAdjacentHTML('beforeend', itemRows(items.slice(already)));
+                }
+
+                var note = page.querySelector('[data-run-progress="' + expandedRunId + '"]');
+
+                if (note) {
+                    note.textContent = drawerProgressNote(detail);
+                }
             }
 
             function renderRuns() {
@@ -1063,31 +1168,27 @@
                 if (!recentRuns.length) {
                     container.innerHTML =
                         '<p class="fieldDescription">No runs recorded yet.</p>';
+                    renderedSignature = null;
+                    return;
+                }
+
+                var signature = structureSignature();
+
+                if (signature === renderedSignature && container.querySelector('[data-run-row]')) {
+                    patchRuns();
                     return;
                 }
 
                 container.innerHTML = '<div class="paperList">' + recentRuns.map(function (run) {
                     var word = statusWord(run.Status);
-                    var totals = run.Totals || {};
 
-                    var meta = (run.Kind === 'delete' ? 'Delete' : 'Generate')
-                        + ' · ' + escapeHtml(run.Trigger || 'manual')
-                        + ' · ' + escapeHtml(formatDuration(run.DurationSeconds));
-
-                    if (run.Kind === 'delete') {
-                        meta += ' · ' + (totals.FilesRemoved || 0) + ' files removed';
-                    } else {
-                        meta += ' · ' + (totals.Generated || 0) + ' generated';
-                        if (totals.Failed) { meta += ', ' + totals.Failed + ' failed'; }
-                    }
-
-                    return '<div class="listItem listItem-border">'
+                    return '<div class="listItem listItem-border" data-run-row="'
+                        + escapeHtml(run.RunId) + '">'
                         + '<div class="colRunRow">'
                         + '<span class="colDot colDot' + escapeHtml(word) + '"></span>'
                         + '<div class="listItemBody colRunBody">'
-                        + '<div class="listItemBodyText">' + escapeHtml(word) + ' · '
-                        + escapeHtml(relativeTime(run.StartedAt)) + '</div>'
-                        + '<div class="listItemBodyText secondary">' + meta + '</div>'
+                        + '<div class="listItemBodyText" data-run-title>' + runTitle(run) + '</div>'
+                        + '<div class="listItemBodyText secondary" data-run-meta>' + runMeta(run) + '</div>'
                         + '</div>'
                         + '<button is="emby-button" type="button" class="raised colRunToggle" '
                         + 'data-id="' + escapeHtml(run.RunId) + '"><span>'
@@ -1096,6 +1197,18 @@
                         + runDrawer(run)
                         + '</div>';
                 }).join('') + '</div>';
+
+                renderedSignature = signature;
+
+                // A genuine rebuild still has to put the drawer back where it was.
+                // This path runs when a run ends or the list changes underneath an
+                // open drawer, and losing the reader's place there is the same
+                // complaint in a rarer costume.
+                var restored = container.querySelector('.colItemScroll');
+
+                if (restored && drawerScrollTop) {
+                    restored.scrollTop = drawerScrollTop;
+                }
             }
 
             function fetchRunDetail(runId) {
@@ -1143,10 +1256,23 @@
 
                 var id = button.getAttribute('data-id');
                 expandedRunId = expandedRunId === id ? null : id;
+
+                // A different run opens at the top; the remembered position belongs
+                // to the drawer that was just closed.
+                drawerScrollTop = 0;
                 renderRuns();
 
                 if (expandedRunId) { fetchRunDetail(expandedRunId); }
             });
+
+            // Capture phase, because scroll does not bubble. This is the only way to
+            // watch a scroller that is replaced whenever the drawer is rebuilt.
+            page.querySelector('#ColoristRuns').addEventListener('scroll', function (event) {
+                if (event.target && event.target.classList
+                    && event.target.classList.contains('colItemScroll')) {
+                    drawerScrollTop = event.target.scrollTop;
+                }
+            }, true);
 
             /*
              * One poll drives everything.
@@ -1230,9 +1356,22 @@
                         // history once more and leave the poll stopped.
                         wasRunning = false;
                         awaitingStart = 0;
-                        if (expandedRunId) { delete runDetails[expandedRunId]; }
                         page.querySelector('#ColoristRunStatus').textContent = 'Finished.';
-                        refreshRuns();
+
+                        // The cached copy is the half-finished one this page was
+                        // watching, so it has to go — but it has to be replaced too.
+                        // Dropping it without refetching left an open drawer showing
+                        // "Loading…" for a run that had in fact just finished.
+                        var reopen = expandedRunId;
+
+                        if (reopen) { delete runDetails[reopen]; }
+
+                        refreshRuns().then(function () {
+                            if (reopen && expandedRunId === reopen) {
+                                fetchRunDetail(reopen);
+                            }
+                        });
+
                         return;
                     }
 

@@ -24,7 +24,7 @@ The .NET 9 SDK is installed per-user and is **not on `PATH` by default**:
 export PATH="$HOME/.dotnet:$PATH"     # required first, in every shell
 
 dotnet build Jellyfin.Plugin.Colorist.sln -c Release
-dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 241 tests, no network, no ffmpeg
+dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 243 tests, no network, no ffmpeg
 ./build/package.sh                                       # artifacts/Colorist_<version>/
 VERSION=0.2.0.0 CHANGELOG="..." ./build/release.sh       # zip + manifest.json entry
 ```
@@ -73,12 +73,29 @@ execution and DOM manipulation.
 
 ## Decisions worth not relitigating
 
+**Run rows are patched, not rebuilt.** `renderRuns` replaces `innerHTML` only when
+`structureSignature` changes — which runs exist, their status, which is open. A live
+run changes its counts every two seconds while its shape does not, and rebuilding for
+a number that moved threw the drawer's scroll position back to the top on every poll.
+The poll path appends new `<tr>` elements and rewrites text nodes instead. The genuine
+rebuild (a run ending) restores `drawerScrollTop`, which is tracked from a
+capture-phase scroll listener rather than read at rebuild time — that rebuild is two
+renders, and by the second there is no scroller left to read a position from.
+
 **Memory answers the progress panel; the file answers history.** `RunLogStore` holds
 the live run in memory and serves `Current()` from it, so a two-second poll costs a
 lock rather than re-reading and re-parsing a file that grows with every item. Writes
 are debounced to five seconds precisely because nothing is reading the file during a
 run. `CurrentItem` is never persisted — it changes several times a second and is only
 ever read from the snapshot.
+
+**Run files are named `<start time>-<run id>.json`.** Ordering used to come from the
+file's modification time, which is when a run last *wrote* — effectively when it
+finished. Those disagree whenever runs differ in length: a three-hour run started at
+nine listed above a two-minute one started at ten. The start time in the name makes
+the order a property of the run rather than of the filesystem, and costs no reads to
+sort by. Files named by ID alone (0.3.0.0 and earlier) are still found, by matching
+the trailing ID, and fall back to modification time for ordering until they rotate.
 
 **A run's own process cannot record that it died.** A file left saying `running` that
 is not the live run belongs to a server that was restarted mid-run, so `Abandoned` is

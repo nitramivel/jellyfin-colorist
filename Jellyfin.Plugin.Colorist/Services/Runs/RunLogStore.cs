@@ -205,7 +205,8 @@ namespace Jellyfin.Plugin.Colorist.Services.Runs
                 }
             }
 
-            var document = Read(PathFor(runId));
+            var path = FindFile(runId);
+            var document = path is null ? null : Read(path);
 
             if (document is null)
             {
@@ -239,8 +240,75 @@ namespace Jellyfin.Plugin.Colorist.Services.Runs
             return document;
         }
 
-        private string PathFor(Guid runId) =>
-            Path.Combine(BasePath, runId.ToString("N", CultureInfo.InvariantCulture) + ".json");
+        /// <summary>The timestamp format a run file's name begins with.</summary>
+        /// <remarks>
+        /// Fixed width, UTC, most significant first, so an ordinary string comparison
+        /// of file names is a chronological one.
+        /// </remarks>
+        private const string StampFormat = "yyyyMMddHHmmssfff";
+
+        /// <summary>
+        /// The file a run is written to.
+        /// </summary>
+        /// <remarks>
+        /// <b>The name carries when the run started.</b> Ordering used to come from
+        /// the file's modification time, which is when a run last <i>wrote</i> —
+        /// effectively when it finished. Those disagree exactly when runs overlap or
+        /// differ in length: a three-hour run started at nine and a two-minute one
+        /// started at ten would list the long one first, because it stopped writing
+        /// later. Putting the start time in the name makes the order a property of
+        /// the run rather than of the filesystem, and costs no reads to sort by.
+        /// </remarks>
+        private string PathFor(DateTime startedAt, Guid runId) =>
+            Path.Combine(
+                BasePath,
+                startedAt.ToUniversalTime().ToString(StampFormat, CultureInfo.InvariantCulture)
+                    + "-" + runId.ToString("N", CultureInfo.InvariantCulture) + ".json");
+
+        /// <summary>Finds a run's file whatever it happens to be called.</summary>
+        /// <remarks>
+        /// Matched on the trailing ID so files written before the name carried a
+        /// timestamp are still found. Those are read and listed normally; they simply
+        /// sort by modification time until they rotate away.
+        /// </remarks>
+        private string? FindFile(Guid runId)
+        {
+            var suffix = runId.ToString("N", CultureInfo.InvariantCulture) + ".json";
+
+            foreach (var file in EnumerateRunFiles())
+            {
+                if (Path.GetFileName(file).EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return file;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>When a run started, taken from its file name.</summary>
+        /// <remarks>
+        /// Falls back to the modification time for a file written before the name
+        /// carried the start time — the old behaviour, kept only for those.
+        /// </remarks>
+        private static DateTime StartedAtOf(FileInfo file)
+        {
+            var name = Path.GetFileNameWithoutExtension(file.Name);
+
+            if (name.Length > StampFormat.Length
+                && name[StampFormat.Length] == '-'
+                && DateTime.TryParseExact(
+                    name[..StampFormat.Length],
+                    StampFormat,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var stamp))
+            {
+                return stamp;
+            }
+
+            return file.LastWriteTimeUtc;
+        }
 
         private IEnumerable<string> EnumerateRunFiles()
         {
@@ -251,12 +319,12 @@ namespace Jellyfin.Plugin.Colorist.Services.Runs
 
             try
             {
-                // Ordered by name, which sorts by the timestamp prefix... except it
-                // does not: files are named by run ID. Ordered by write time instead,
-                // which is what "most recent" actually means here.
+                // Newest run first, by when each STARTED. This is also the order
+                // Prune trims from the end of, so rotation drops the oldest run
+                // rather than the one that happened to be written to least recently.
                 return new DirectoryInfo(BasePath)
                     .GetFiles("*.json")
-                    .OrderByDescending(static f => f.LastWriteTimeUtc)
+                    .OrderByDescending(StartedAtOf)
                     .Select(static f => f.FullName)
                     .ToList();
             }
@@ -310,7 +378,7 @@ namespace Jellyfin.Plugin.Colorist.Services.Runs
             {
                 Directory.CreateDirectory(BasePath);
 
-                var path = PathFor(document.RunId);
+                var path = PathFor(document.StartedAt, document.RunId);
                 var temporary = path + ".tmp";
 
                 File.WriteAllText(temporary, JsonSerializer.Serialize(document, SerializerOptions));
