@@ -70,6 +70,20 @@ execution and DOM manipulation.
 
 ## Decisions worth not relitigating
 
+**Enums reach the settings page as names, not numbers.** Verified by reflecting over
+`Jellyfin.Extensions.Json.JsonDefaults.Options`, which registers `JsonGuidConverter`,
+`JsonFlagEnumConverterFactory`, `JsonDefaultStringEnumConverterFactory`,
+`JsonStringEnumConverter` and friends — so `CropMode` serialises as `"Auto"`. Property
+names *are* PascalCase (`PropertyNamingPolicy` is null), so `config.CropMode` is
+correct; it was only the value that was wrong. The `option` values in `configPage.html`
+must be the enum member names. Reading is tolerant — the server accepts `"Fixed"`, `2`
+and `"2"` alike — so only the page's outgoing value ever needed pinning.
+
+**Changelog text in `manifest.json` is rendered as HTML by the dashboard.** Anything
+in angle brackets is parsed as a tag: `<video filename>-colorist.json` opened a video
+element and swallowed the rest of the entry, which is why 0.2.0.0 showed a large blank
+space in the catalogue. Write changelogs as plain prose with no angle brackets.
+
 **Deleting is scoped by configuration, not by the include switches.**
 `DeleteBarcodesTask` enumerates via `BarcodeService.GetAllItems`, which ignores
 `IncludeMovies`/`IncludeEpisodes` — those say what a *generation* run builds, and

@@ -102,7 +102,7 @@
 
                     <div class="selectContainer">
                         <label class="selectLabel" for="ColorStrategy">Colour algorithm</label>
-                        <select is="emby-select" id="ColorStrategy" name="ColorStrategy" class="emby-select">
+                        <select is="emby-select" id="ColorStrategy" name="ColorStrategy" class="emby-select-withcolor emby-select">
                             <option value="mediancut">Median cut (recommended)</option>
                             <option value="kmeans">k-means</option>
                             <option value="mean">Average</option>
@@ -198,10 +198,15 @@
 
                     <div class="selectContainer">
                         <label class="selectLabel" for="CropMode">Letterboxing</label>
-                        <select is="emby-select" id="CropMode" name="CropMode" class="emby-select">
-                            <option value="0">None &mdash; sample the whole frame</option>
-                            <option value="1">Auto &mdash; detect black bars per item</option>
-                            <option value="2">Fixed &mdash; same crop for everything</option>
+                        <!-- Values are the enum NAMES, not its numbers. Jellyfin's JSON
+                             stack carries JsonStringEnumConverter, so this setting
+                             arrives as "Auto" rather than 1 — assigning the number
+                             matched no option, which left the control blank on every
+                             visit and saved a NaN back over the real setting. -->
+                        <select is="emby-select" id="CropMode" name="CropMode" class="emby-select-withcolor emby-select">
+                            <option value="None">None &mdash; sample the whole frame</option>
+                            <option value="Auto">Auto &mdash; detect black bars per item</option>
+                            <option value="Fixed">Fixed &mdash; same crop for everything</option>
                         </select>
                         <div class="fieldDescription colNote">
                             Black bars wash out every sample, so they are removed before the colour is measured.
@@ -369,7 +374,7 @@
                             Queues the scheduled task. A full library is potentially hours of ffmpeg, so it runs
                             in the background &mdash; watch it under Dashboard &rarr; Scheduled Tasks.
                         </div>
-                        <button is="emby-button" type="button" id="ColoristRunAll" class="raised block">
+                        <button is="emby-button" type="button" id="ColoristRunAll" class="raised">
                             <span>Generate for the whole library</span>
                         </button>
                         <div id="ColoristRunStatus" class="colStatusLine"></div>
@@ -386,7 +391,7 @@
                             <input is="emby-input" type="text" id="ColoristPreviewId" class="emby-input"
                                    placeholder="e.g. 6f3a1c2e4b5d6789abcdef0123456789" />
                         </div>
-                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="raised block">
+                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="raised">
                             <span>Build it</span>
                         </button>
                         <div id="ColoristPreviewStatus" class="colStatusLine"></div>
@@ -415,7 +420,7 @@
                             barcode will need sampling again.
                         </div>
 
-                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="raised block colDangerButton">
+                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="raised colDangerButton">
                             <span>Delete saved barcodes</span>
                         </button>
                         <div id="ColoristDeleteStatus" class="colStatusLine"></div>
@@ -445,7 +450,30 @@
 
             function syncCropFields() {
                 var mode = page.querySelector('#CropMode').value;
-                page.querySelector('#FixedCropFields').style.display = mode === '2' ? '' : 'none';
+                page.querySelector('#FixedCropFields').style.display = mode === 'Fixed' ? '' : 'none';
+            }
+
+            /*
+             * Normalises whatever the server said this enum is into an option value.
+             *
+             * Jellyfin serialises enums as their names — CropMode comes back as
+             * "Auto" — so the numbers this page used to assign matched no option and
+             * left the control blank, which then saved NaN over the setting on the
+             * next submit. Numbers are still accepted here because a configuration
+             * written by an older build, or edited by hand in the XML on disk, can
+             * hold one; the server reads names, numbers and numeric strings alike,
+             * so only this direction ever needed fixing.
+             */
+            var CROP_MODES = ['None', 'Auto', 'Fixed'];
+
+            function cropModeName(value) {
+                var text = value === null || value === undefined ? '' : String(value);
+
+                if (/^\d+$/.test(text)) {
+                    return CROP_MODES[parseInt(text, 10)] || 'Auto';
+                }
+
+                return CROP_MODES.indexOf(text) >= 0 ? text : 'Auto';
             }
 
             /*
@@ -485,7 +513,7 @@
                     page.querySelector('#Columns').value = config.Columns;
                     page.querySelector('#KeyframesOnly').checked = config.KeyframesOnly;
                     page.querySelector('#ToneMapHdr').checked = config.ToneMapHdr;
-                    page.querySelector('#CropMode').value = String(config.CropMode);
+                    page.querySelector('#CropMode').value = cropModeName(config.CropMode);
                     page.querySelector('#FixedCropWidth').value = config.FixedCropWidth;
                     page.querySelector('#FixedCropHeight').value = config.FixedCropHeight;
                     page.querySelector('#FixedCropX').value = config.FixedCropX;
@@ -533,7 +561,10 @@
                     config.Columns = numberOf('#Columns', 1000);
                     config.KeyframesOnly = page.querySelector('#KeyframesOnly').checked;
                     config.ToneMapHdr = page.querySelector('#ToneMapHdr').checked;
-                    config.CropMode = parseInt(page.querySelector('#CropMode').value, 10);
+                    // Sent as the name, which is what the server sends back. It reads
+                    // names, numbers and numeric strings, so this is the one form
+                    // guaranteed to survive the round trip unchanged.
+                    config.CropMode = page.querySelector('#CropMode').value;
                     config.FixedCropWidth = numberOf('#FixedCropWidth', 0);
                     config.FixedCropHeight = numberOf('#FixedCropHeight', 0);
                     config.FixedCropX = numberOf('#FixedCropX', 0);

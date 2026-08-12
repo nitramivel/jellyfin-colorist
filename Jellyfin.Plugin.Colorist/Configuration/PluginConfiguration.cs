@@ -19,9 +19,18 @@ namespace Jellyfin.Plugin.Colorist.Configuration
 
     /// <summary>Colorist's settings.</summary>
     /// <remarks>
-    /// Option order in the configuration page's <c>select</c> elements is
-    /// load-bearing for the two enums here, since a stored numeric value falls back
-    /// to index matching. Change the labels freely; never reorder them.
+    /// <b>An enum here crosses the wire as its name, not its number.</b> Jellyfin's
+    /// JSON stack carries <c>JsonStringEnumConverter</c>, so <see cref="CropMode"/>
+    /// reaches the settings page as <c>"Auto"</c>. The <c>option</c> values in the
+    /// configuration page must therefore be the enum member names spelled exactly as
+    /// they are here — renaming a member without renaming the option leaves the
+    /// control blank on every visit and saves nothing back, which is precisely what
+    /// happened when those options held <c>0</c>, <c>1</c> and <c>2</c>.
+    /// <para>
+    /// Reading is the tolerant direction: the server accepts the name, the number and
+    /// the number as a string, so only what the page sends had to be pinned down.
+    /// Option <i>order</i> is no longer load-bearing.
+    /// </para>
     /// </remarks>
     public class PluginConfiguration : BasePluginConfiguration
     {
