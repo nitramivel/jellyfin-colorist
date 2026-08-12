@@ -33,9 +33,19 @@
                     margin-left: 0.5em;
                 }
 
-                .colTabBar { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 1em 0 1.5em 0; }
-                .colTabBar .colTabButton { margin: 0; }
-                .colTabButton.colTabActive { background: #00a4dc; color: #fff; }
+                /* Tabs are the one control here that is NOT an emby-button. A tab is
+                   not a raised, pressable thing — it labels which panel you are
+                   looking at — and Jellyfin's button theming fights that at every
+                   turn. Underline instead, which is what Curator settled on. */
+                .colTabs { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 1em 0 1.5em 0; }
+                .colTab {
+                    background: none; border: 0; border-bottom: 2px solid transparent;
+                    color: inherit; font: inherit; font-size: 1.02em;
+                    padding: 0.5em 0.9em; cursor: pointer; opacity: 0.6;
+                    transition: opacity 0.15s, border-color 0.15s;
+                }
+                .colTab:hover { opacity: 0.9; }
+                .colTab.is-active { opacity: 1; border-bottom-color: currentColor; }
                 .colPanel { display: none; }
                 .colPanel.colPanelActive { display: block; }
                 .colNote {
@@ -161,13 +171,13 @@
                    narrow viewport still shrinks instead of scrolling sideways. */
                 #ColoristConfigPage .content-primary { max-width: 1280px; }
 
-                /* The action buttons are plain <button class="raised">, not
-                   is="emby-button". Customized built-in elements do not upgrade when
-                   they arrive through innerHTML, so the Details and Hide buttons in
-                   the run list have always been plain ones — and they are the pair
-                   that looked right. Declaring the attribute on the static buttons
-                   and not on the generated ones meant two kinds of button on one
-                   card, styled differently for a reason nobody chose. */
+                /* Every button except the tabs carries is="emby-button" and the
+                   class "raised", generated ones included — the attribute is what
+                   Jellyfin's button theming keys on, so a button without it renders
+                   bare. Removing it once, on the theory that generated buttons never
+                   upgrade and so should be matched, stripped the styling from the
+                   whole page: the upgrade is what adds behaviour, but the CSS
+                   applies from the attribute either way. Labels go in a <span>. */
 
                 /* The one irreversible control on the page, marked as such. */
                 .colDanger {
@@ -187,11 +197,11 @@
                 </p>
             </div>
 
-            <div class="colTabBar">
-                <button is="emby-button" type="button" class="raised colTabButton colTabActive" data-panel="colour">Colour</button>
-                <button is="emby-button" type="button" class="raised colTabButton" data-panel="sampling">Sampling</button>
-                <button is="emby-button" type="button" class="raised colTabButton" data-panel="output">Output</button>
-                <button is="emby-button" type="button" class="raised colTabButton" data-panel="run">Run</button>
+            <div class="colTabs" role="tablist">
+                <button type="button" class="colTab is-active" role="tab" data-panel="colour">Colour</button>
+                <button type="button" class="colTab" role="tab" data-panel="sampling">Sampling</button>
+                <button type="button" class="colTab" role="tab" data-panel="output">Output</button>
+                <button type="button" class="colTab" role="tab" data-panel="run">Run</button>
             </div>
 
             <form id="ColoristConfigForm">
@@ -504,7 +514,7 @@
                             Queues the scheduled task. A full library is potentially hours of ffmpeg, so it runs
                             in the background &mdash; progress appears below as it goes.
                         </div>
-                        <button type="button" id="ColoristRunAll" class="raised">
+                        <button is="emby-button" type="button" id="ColoristRunAll" class="raised">
                             <span>Generate for the whole library</span>
                         </button>
                         <div id="ColoristRunStatus" class="colStatusLine"></div>
@@ -544,7 +554,7 @@
                             <input is="emby-input" type="text" id="ColoristPreviewId" class="emby-input"
                                    placeholder="e.g. 6f3a1c2e4b5d6789abcdef0123456789" />
                         </div>
-                        <button type="button" id="ColoristPreviewRun" class="raised">
+                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="raised">
                             <span>Build it</span>
                         </button>
                         <div id="ColoristPreviewStatus" class="colStatusLine"></div>
@@ -573,7 +583,7 @@
                             barcode will need sampling again.
                         </div>
 
-                        <button type="button" id="ColoristDeleteAll" class="raised colDangerButton">
+                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="raised colDangerButton">
                             <span>Delete saved barcodes</span>
                         </button>
                         <div id="ColoristDeleteStatus" class="colStatusLine"></div>
@@ -591,9 +601,11 @@
 
             function selectPanel(name) {
                 var i;
-                var tabs = page.querySelectorAll('.colTabButton');
+                var tabs = page.querySelectorAll('.colTab');
                 for (i = 0; i < tabs.length; i++) {
-                    tabs[i].classList.toggle('colTabActive', tabs[i].getAttribute('data-panel') === name);
+                    var active = tabs[i].getAttribute('data-panel') === name;
+                    tabs[i].classList.toggle('is-active', active);
+                    tabs[i].setAttribute('aria-selected', active ? 'true' : 'false');
                 }
                 var panels = page.querySelectorAll('.colPanel');
                 for (i = 0; i < panels.length; i++) {
@@ -817,8 +829,8 @@
                 }
             });
 
-            page.querySelector('.colTabBar').addEventListener('click', function (event) {
-                var button = event.target.closest('.colTabButton');
+            page.querySelector('.colTabs').addEventListener('click', function (event) {
+                var button = event.target.closest('.colTab');
                 if (button) {
                     selectPanel(button.getAttribute('data-panel'));
                 }
@@ -1198,7 +1210,7 @@
                         + '<div class="listItemBodyText" data-run-title>' + runTitle(run) + '</div>'
                         + '<div class="listItemBodyText secondary" data-run-meta>' + runMeta(run) + '</div>'
                         + '</div>'
-                        + '<button type="button" class="raised colRunToggle" '
+                        + '<button is="emby-button" type="button" class="raised colRunToggle" '
                         + 'data-id="' + escapeHtml(run.RunId) + '"><span>'
                         + (expandedRunId === run.RunId ? 'Hide' : 'Details') + '</span></button>'
                         + '</div>'

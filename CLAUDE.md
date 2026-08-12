@@ -89,12 +89,17 @@ are debounced to five seconds precisely because nothing is reading the file duri
 run. `CurrentItem` is never persisted — it changes several times a second and is only
 ever read from the snapshot.
 
-**Every button on the settings page is a plain `<button class="raised">`.** Customized
-built-in elements do not upgrade when they arrive through `innerHTML`, so the
-generated Details/Hide buttons were always plain ones while the static action buttons
-carried `is="emby-button"` — two kinds of button on one card, styled differently for a
-reason nobody chose. The tab bar and the Save submit keep the attribute; they are
-static and are meant to look like dashboard chrome.
+**Every button carries `is="emby-button" class="raised"` — including generated ones.**
+Jellyfin's button theming keys on that attribute, so a button without it renders bare.
+Removing it once, on the theory that customized built-ins never upgrade inside
+`innerHTML` and so the static buttons should be matched to the generated ones, stripped
+the styling from the entire page: the upgrade supplies *behaviour*, but the CSS applies
+from the attribute whether or not it happened. Labels go in a `<span>`.
+
+**The tabs are the exception, and are not buttons in the emby sense.** Plain
+`<button class="colTab" role="tab">`, underlined when active — a tab labels which
+panel you are looking at rather than being a raised, pressable thing, and Jellyfin's
+button theming fights that. Same conclusion Curator reached.
 
 **Cancellation is caught around the dispatch loop, not just the await.**
 `GenerateBarcodesTask` spends its whole life inside `foreach`, because
