@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Colorist.Configuration;
+using Jellyfin.Plugin.Colorist.Core.Runs;
+using Jellyfin.Plugin.Colorist.Services.Runs;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -22,14 +25,20 @@ namespace Jellyfin.Plugin.Colorist.Services
     public sealed class GenerateBarcodesTask : IScheduledTask
     {
         private readonly BarcodeService _service;
+        private readonly RunLogStore _runs;
         private readonly ILogger<GenerateBarcodesTask> _logger;
 
         /// <summary>Initialises a new instance of the <see cref="GenerateBarcodesTask"/> class.</summary>
         /// <param name="service">The generator.</param>
+        /// <param name="runs">Where the run is recorded.</param>
         /// <param name="logger">The logger.</param>
-        public GenerateBarcodesTask(BarcodeService service, ILogger<GenerateBarcodesTask> logger)
+        public GenerateBarcodesTask(
+            BarcodeService service,
+            RunLogStore runs,
+            ILogger<GenerateBarcodesTask> logger)
         {
             _service = service;
+            _runs = runs;
             _logger = logger;
         }
 
@@ -65,16 +74,30 @@ namespace Jellyfin.Plugin.Colorist.Services
         public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             var configuration = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+            var concurrency = BarcodeService.ResolveConcurrency(configuration.MaxConcurrency);
+
+            using var run = _runs.Begin(RunKind.Generate, RunTrigger.Scheduled);
+
+            run.Configure(new RunSettings(
+                configuration.ColorStrategy,
+                configuration.Columns,
+                configuration.CropMode.ToString(),
+                configuration.KeyframesOnly,
+                configuration.ToneMapHdr,
+                configuration.WriteImageSidecar,
+                concurrency,
+                configuration.ForceRegenerate));
+
             var items = _service.GetEligibleItems(Guid.Empty);
+            run.Plan(items.Count);
 
             if (items.Count == 0)
             {
                 _logger.LogInformation("Colorist: nothing to do — no eligible items");
+                run.Complete();
                 progress.Report(100);
                 return;
             }
-
-            var concurrency = BarcodeService.ResolveConcurrency(configuration.MaxConcurrency);
 
             _logger.LogInformation(
                 "Colorist: {Count} items, {Concurrency} at a time",
@@ -98,13 +121,22 @@ namespace Jellyfin.Plugin.Colorist.Services
                 running.Add(Task.Run(
                     async () =>
                     {
+                        // Named before the work rather than after, so the settings
+                        // page can say what is being sampled while it is being
+                        // sampled — which on a three-hour film is the only sign the
+                        // run has not wedged.
+                        run.Begin(item.Name ?? "Unnamed item");
+
+                        var started = Stopwatch.GetTimestamp();
+                        var report = new BarcodeReport(BarcodeOutcome.Failed);
+
                         try
                         {
-                            var outcome = await _service
+                            report = await _service
                                 .GenerateAsync(item, configuration.ForceRegenerate, cancellationToken)
                                 .ConfigureAwait(false);
 
-                            switch (outcome)
+                            switch (report.Outcome)
                             {
                                 case BarcodeOutcome.Generated:
                                     Interlocked.Increment(ref generated);
@@ -118,6 +150,19 @@ namespace Jellyfin.Plugin.Colorist.Services
                                 default:
                                     break;
                             }
+
+                            run.Finish(new RunItem(
+                                item.Name ?? "Unnamed item",
+                                item.Id,
+                                report.Outcome.ToString(),
+                                Stopwatch.GetElapsedTime(started).TotalSeconds,
+                                report.Samples,
+                                report.Columns,
+                                report.Crop,
+                                report.ToneMapping,
+                                report.Path,
+                                report.BesideMedia,
+                                Error: report.Error));
                         }
                         finally
                         {
@@ -143,6 +188,8 @@ namespace Jellyfin.Plugin.Colorist.Services
                     "Colorist: cancelled after {Completed} of {Total} items",
                     completed,
                     items.Count);
+
+                run.Cancel();
                 throw;
             }
 
@@ -152,6 +199,7 @@ namespace Jellyfin.Plugin.Colorist.Services
                 skipped.ToString(CultureInfo.InvariantCulture),
                 failed.ToString(CultureInfo.InvariantCulture));
 
+            run.Complete();
             progress.Report(100);
         }
     }

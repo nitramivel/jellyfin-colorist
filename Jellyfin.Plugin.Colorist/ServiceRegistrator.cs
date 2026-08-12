@@ -18,6 +18,11 @@ namespace Jellyfin.Plugin.Colorist
             serviceCollection.AddSingleton<BarcodeStore>();
             serviceCollection.AddSingleton<BarcodeService>();
 
+            // Singleton because it holds the live run in memory — that snapshot is
+            // what makes the settings page's progress realtime, and a scoped
+            // instance would have nothing in it.
+            serviceCollection.AddSingleton<Services.Runs.RunLogStore>();
+
             serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, GenerateBarcodesTask>();
             serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, DeleteBarcodesTask>();
 

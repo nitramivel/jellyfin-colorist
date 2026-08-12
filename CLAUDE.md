@@ -24,7 +24,7 @@ The .NET 9 SDK is installed per-user and is **not on `PATH` by default**:
 export PATH="$HOME/.dotnet:$PATH"     # required first, in every shell
 
 dotnet build Jellyfin.Plugin.Colorist.sln -c Release
-dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 185 tests, no network, no ffmpeg
+dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 214 tests, no network, no ffmpeg
 ./build/package.sh                                       # artifacts/Colorist_<version>/
 VERSION=0.2.0.0 CHANGELOG="..." ./build/release.sh       # zip + manifest.json entry
 ```
@@ -48,6 +48,7 @@ Core/          pure, no I/O, no Jellyfin types — all of it unit tested
   Color/       Oklab, the three strategies, cluster scoring, the factory
   Sampling/    sample planning, ffmpeg argument construction, crop and pts parsing, binning
   Imaging/     PNG writer (ZLibStream + CRC32), barcode composer — only for the optional PNG
+  Runs/        run log document shape, and RunEstimate (throughput → time left)
   BarcodeData  the stored format: pack, unpack, the JSON envelope
   SidecarPaths naming and location rules, one extension per artefact
 Services/      everything that touches a process, a file or Jellyfin
@@ -57,6 +58,7 @@ Services/      everything that touches a process, a file or Jellyfin
   BarcodeService      orchestration, eligibility, crop resolution
   GenerateBarcodesTask  IScheduledTask, the only bulk path
   DeleteBarcodesTask    IScheduledTask, no default triggers, the only bulk removal
+  Runs/RunLogStore      live run in memory, finished runs on disk, rotated at 20
   Web/ScriptInjector  IStartupFilter middleware, patches index.html
 Api/           ColoristController
 Web/           colorist.js, embedded
@@ -69,6 +71,33 @@ pure strings and asserted on. What is left unverified is genuinely only process
 execution and DOM manipulation.
 
 ## Decisions worth not relitigating
+
+**Memory answers the progress panel; the file answers history.** `RunLogStore` holds
+the live run in memory and serves `Current()` from it, so a two-second poll costs a
+lock rather than re-reading and re-parsing a file that grows with every item. Writes
+are debounced to five seconds precisely because nothing is reading the file during a
+run. `CurrentItem` is never persisted — it changes several times a second and is only
+ever read from the snapshot.
+
+**A run's own process cannot record that it died.** A file left saying `running` that
+is not the live run belongs to a server that was restarted mid-run, so `Abandoned` is
+worked out on read rather than written. `IRunLog.Dispose` is the narrower safety net,
+for a task that throws past its own handler.
+
+**The estimate is throughput, not average item duration.** Items are processed several
+at a time, so "mean duration × items left" overstates by the concurrency factor.
+`RunEstimate` counts completions per wall-clock second over a 20-completion window —
+windowed because Jellyfin hands items over grouped by library, so a run genuinely
+changes pace when it crosses from films into episodes. Measured to *now* rather than
+to the last completion, so a run stalled on one enormous file shows a growing estimate
+instead of counting down through a hang.
+
+**Polling has to survive the gap between queueing and starting.** Pressing Generate
+hands the job to Jellyfin's task manager and returns; the task begins a moment later.
+A poll landing in that window sees an idle server, and if idle simply meant "stop
+polling", the loop would die exactly as the run began and the panel would never appear.
+`watchForStart` keeps polling through a 30-second grace period, and a generation
+counter stops overlapping chains from clearing each other's timers.
 
 **Enums reach the settings page as names, not numbers.** Verified by reflecting over
 `Jellyfin.Extensions.Json.JsonDefaults.Options`, which registers `JsonGuidConverter`,

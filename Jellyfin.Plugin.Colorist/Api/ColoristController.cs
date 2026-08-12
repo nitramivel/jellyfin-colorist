@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Colorist.Core;
+using Jellyfin.Plugin.Colorist.Core.Runs;
 using Jellyfin.Plugin.Colorist.Services;
+using Jellyfin.Plugin.Colorist.Services.Runs;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Tasks;
@@ -25,6 +28,7 @@ namespace Jellyfin.Plugin.Colorist.Api
         private readonly ILibraryManager _libraryManager;
         private readonly BarcodeService _service;
         private readonly BarcodeStore _store;
+        private readonly RunLogStore _runs;
         private readonly ITaskManager _taskManager;
         private readonly ILogger<ColoristController> _logger;
 
@@ -32,21 +36,67 @@ namespace Jellyfin.Plugin.Colorist.Api
         /// <param name="libraryManager">Library access.</param>
         /// <param name="service">The generator.</param>
         /// <param name="store">Barcode storage.</param>
+        /// <param name="runs">Run history.</param>
         /// <param name="taskManager">Used to queue the scheduled task.</param>
         /// <param name="logger">The logger.</param>
         public ColoristController(
             ILibraryManager libraryManager,
             BarcodeService service,
             BarcodeStore store,
+            RunLogStore runs,
             ITaskManager taskManager,
             ILogger<ColoristController> logger)
         {
             _libraryManager = libraryManager;
             _service = service;
             _store = store;
+            _runs = runs;
             _taskManager = taskManager;
             _logger = logger;
         }
+
+        /// <summary>What the plugin is doing right now.</summary>
+        /// <returns>The live run, or that there is none.</returns>
+        /// <remarks>
+        /// Polled every couple of seconds by every open settings page while a run is
+        /// going, which is why it is served from the run store's in-memory snapshot
+        /// rather than by reading the run file back. The cost is a lock and a small
+        /// allocation; the estimate is recomputed per call so it keeps moving between
+        /// completions rather than freezing on a slow item.
+        /// </remarks>
+        [HttpGet("Status")]
+        [Authorize(Policy = Policies.RequiresElevation)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public ActionResult<ColoristStatus> GetStatus()
+        {
+            var current = _runs.Current();
+
+            return new ColoristStatus(current is not null, current);
+        }
+
+        /// <summary>The most recent runs.</summary>
+        /// <param name="limit">How many to return.</param>
+        /// <returns>Their summaries, newest first.</returns>
+        /// <remarks>
+        /// Summaries only — the per-item lines are the bulk of a run file and a
+        /// library-wide run has one per episode. Fetch those from
+        /// <c>Runs/{runId}</c> when a row is actually opened.
+        /// </remarks>
+        [HttpGet("Runs")]
+        [Authorize(Policy = Policies.RequiresElevation)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public ActionResult<IReadOnlyList<RunLogSummary>> GetRuns([FromQuery] int limit = 5) =>
+            Ok(_runs.List(Math.Clamp(limit, 1, RunLogStore.RetainedRuns)));
+
+        /// <summary>One run in full, including every item it touched.</summary>
+        /// <param name="runId">The run.</param>
+        /// <returns>The document, or 404.</returns>
+        [HttpGet("Runs/{runId}")]
+        [Authorize(Policy = Policies.RequiresElevation)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public ActionResult<RunLogDocument> GetRun([FromRoute] Guid runId) =>
+            _runs.Detail(runId) is { } document ? Ok(document) : NotFound();
 
         /// <summary>The running plugin version.</summary>
         /// <returns>The assembly version.</returns>
@@ -241,15 +291,14 @@ namespace Jellyfin.Plugin.Colorist.Api
                 return NotFound();
             }
 
-            var outcome = await _service.GenerateAsync(item, force: true, cancellationToken)
+            var report = await _service.GenerateAsync(item, force: true, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (outcome != BarcodeOutcome.Generated)
-            {
-                return UnprocessableEntity(new BarcodeResult(outcome.ToString(), item.Name));
-            }
+            var result = new BarcodeResult(report.Outcome.ToString(), item.Name);
 
-            return new BarcodeResult(outcome.ToString(), item.Name);
+            return report.Outcome != BarcodeOutcome.Generated
+                ? UnprocessableEntity(result)
+                : result;
         }
 
         /// <summary>Deletes an item's barcode.</summary>
@@ -270,6 +319,11 @@ namespace Jellyfin.Plugin.Colorist.Api
     /// <summary>Whether an item has a barcode.</summary>
     /// <param name="Exists">Whether one was found in either location.</param>
     public sealed record BarcodeStatus(bool Exists);
+
+    /// <summary>What the plugin is doing.</summary>
+    /// <param name="IsRunning">Whether a run is in progress.</param>
+    /// <param name="CurrentRun">The live run, or null when idle.</param>
+    public sealed record ColoristStatus(bool IsRunning, RunLogSummary? CurrentRun);
 
     /// <summary>The result of a single-item generation.</summary>
     /// <param name="Outcome">What happened, as the outcome enum's name.</param>

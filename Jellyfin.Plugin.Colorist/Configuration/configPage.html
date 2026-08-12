@@ -58,6 +58,99 @@
                     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
                     gap: 0 1.4em;
                 }
+                /* Run progress. Colours come from the Jellyfin accent rather than
+                   hard-coded brand values, so this sits inside whichever dashboard
+                   theme is active instead of fighting it. */
+                .colProgressHead {
+                    display: flex; align-items: flex-start; justify-content: space-between;
+                    gap: 1em; margin-bottom: 0.7em;
+                }
+                .colProgressPhase { font-size: 1.02em; font-weight: 600; }
+                .colProgressSub {
+                    font-size: 0.86em; opacity: 0.65; margin-top: 0.2em;
+                    overflow-wrap: anywhere;
+                }
+                .colProgressPct {
+                    font-size: 1.5em; font-weight: 600; line-height: 1;
+                    font-variant-numeric: tabular-nums; white-space: nowrap;
+                }
+                .colTrack {
+                    height: 8px; border-radius: 999px; overflow: hidden;
+                    background: rgba(255,255,255,0.12);
+                }
+                .colFill {
+                    height: 100%; width: 0; border-radius: 999px;
+                    background: linear-gradient(90deg, #00a4dc, #56cfe1);
+                    transition: width 600ms cubic-bezier(0.4, 0, 0.2, 1);
+                }
+                /* Indeterminate: progress sits still while a long film is sampled,
+                   and a bar that has visibly stopped reads as a hang. */
+                .colFill.colPulsing { animation: colPulse 1.9s ease-in-out infinite; }
+                @keyframes colPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+                .colStats {
+                    display: flex; flex-wrap: wrap; gap: 0.4em 1.6em; margin-top: 0.8em;
+                    font-size: 0.9em;
+                }
+                .colStat { display: flex; align-items: baseline; gap: 0.4em; }
+                .colStatValue { font-variant-numeric: tabular-nums; font-weight: 600; }
+                .colStatLabel { opacity: 0.6; }
+
+                /* Run history */
+                .colRunRow { display: flex; align-items: flex-start; gap: 0.6em; width: 100%; }
+                .colRunRow .colRunBody { flex: 1 1 auto; min-width: 0; }
+                .colDot {
+                    width: 0.62em; height: 0.62em; border-radius: 50%;
+                    flex: 0 0 auto; margin-top: 0.5em;
+                }
+                .colDotCompleted { background: #4caf76; }
+                .colDotFailed    { background: #d9534f; }
+                .colDotRunning   { background: #00a4dc; }
+                .colDotCancelled { background: #8a8a8a; }
+                .colDotAbandoned { background: #b0883a; }
+
+                /* Jellyfin's .listItem is "display:flex; align-items:center", so a
+                   drawer added as a second child becomes a flex item BESIDE the row
+                   rather than under it, and gets whatever width the row leaves over.
+                   Stacking makes the drawer full width. */
+                #ColoristRuns .listItem { flex-direction: column; align-items: stretch; }
+
+                .colDrawer {
+                    width: 100%; margin-top: 0.8em; padding-top: 0.8em;
+                    border-top: 1px solid rgba(255,255,255,0.08);
+                }
+                .colItemTable {
+                    width: 100%; border-collapse: collapse; font-size: 0.88em;
+                    font-variant-numeric: tabular-nums;
+                }
+                .colItemTable th {
+                    text-align: left; font-weight: 600; opacity: 0.6;
+                    padding: 0.3em 0.8em 0.45em 0; white-space: nowrap;
+                    text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.05em;
+                }
+                .colItemTable td {
+                    padding: 0.32em 0.8em 0.32em 0; vertical-align: top;
+                    border-top: 1px solid rgba(255,255,255,0.06);
+                }
+                .colItemTable td:first-child { overflow-wrap: anywhere; }
+                .colItemName { min-width: 14em; }
+                /* The item list can be thousands of rows; it scrolls inside the
+                   drawer rather than turning the page into a mile of table. */
+                .colItemScroll { max-height: 26em; overflow: auto; }
+                .colOutcome { font-weight: 600; }
+                .colOutcomeGenerated { color: #4caf76; }
+                .colOutcomeFailed    { color: #d9534f; }
+                .colOutcomeSkipped   { opacity: 0.65; }
+                .colOutcomeIneligible { opacity: 0.65; }
+                .colOutcomeRemoved   { color: #56cfe1; }
+                .colDrawerNote { font-size: 0.87em; opacity: 0.65; margin-top: 0.7em; }
+
+                /* This page carries a run table, so it opts out of the dashboard's
+                   default reading column. Scoped to the page id so no other
+                   dashboard page is re-laid-out, and only max-width is touched so a
+                   narrow viewport still shrinks instead of scrolling sideways. */
+                #ColoristConfigPage .content-primary { max-width: 1280px; }
+
                 /* The one irreversible control on the page, marked as such. */
                 .colDanger {
                     border-color: rgba(229,57,53,0.45);
@@ -372,12 +465,35 @@
                         <div class="colCardTitle">Generate now</div>
                         <div class="fieldDescription colNote" style="margin-top:0">
                             Queues the scheduled task. A full library is potentially hours of ffmpeg, so it runs
-                            in the background &mdash; watch it under Dashboard &rarr; Scheduled Tasks.
+                            in the background &mdash; progress appears below as it goes.
                         </div>
                         <button is="emby-button" type="button" id="ColoristRunAll" class="raised">
                             <span>Generate for the whole library</span>
                         </button>
                         <div id="ColoristRunStatus" class="colStatusLine"></div>
+                    </div>
+
+                    <div class="colCard hide" id="ColoristProgress">
+                        <div class="colProgressHead">
+                            <div>
+                                <div class="colProgressPhase" id="ColoristPhase">Starting&hellip;</div>
+                                <div class="colProgressSub" id="ColoristProgressSub"></div>
+                            </div>
+                            <div class="colProgressPct" id="ColoristPct">0%</div>
+                        </div>
+                        <div class="colTrack">
+                            <div class="colFill" id="ColoristFill"></div>
+                        </div>
+                        <div class="colStats" id="ColoristStats"></div>
+                    </div>
+
+                    <div class="colCard">
+                        <div class="colCardTitle">Recent runs</div>
+                        <div class="fieldDescription colNote" style="margin-top:0">
+                            The last five runs, newest first. Open one to see every item it touched and what
+                            was written for it. Twenty are kept on disk; the rest are rotated away.
+                        </div>
+                        <div id="ColoristRuns"></div>
                     </div>
 
                     <div class="colCard">
@@ -599,6 +715,19 @@
             page.addEventListener('pageshow', function () {
                 load();
                 showVersion();
+                refreshRuns();
+                pollStatus();
+            });
+
+            // Navigating away must stop the poll. Jellyfin keeps the page element
+            // around rather than destroying it, so without this a visit to the
+            // dashboard leaves a timer talking to the server for the rest of the
+            // session — and a second visit would start another.
+            page.addEventListener('pagehide', function () {
+                if (statusTimer) {
+                    clearTimeout(statusTimer);
+                    statusTimer = null;
+                }
             });
 
             page.querySelector('.colTabBar').addEventListener('click', function (event) {
@@ -624,11 +753,420 @@
                     type: 'POST',
                     url: ApiClient.getUrl('Colorist/Generate')
                 }).then(function () {
-                    status.textContent = 'Queued. Progress appears under Dashboard → Scheduled Tasks.';
+                    status.textContent = 'Queued.';
+                    // The task takes a moment to pick the job up; without this the
+                    // first poll lands while the store is still idle and the panel
+                    // does not appear until the next scheduled one.
+                    watchForStart();
                 }, function () {
                     status.textContent = 'Could not queue the task — see the server log.';
                 });
             });
+
+            /* ===================== runs and live progress ===================== */
+
+            var recentRuns = [];
+            var runDetails = {};
+            var expandedRunId = null;
+            var statusTimer = null;
+            var wasRunning = false;
+
+            function escapeHtml(value) {
+                return String(value === null || value === undefined ? '' : value)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            }
+
+            function formatDuration(seconds) {
+                if (seconds === null || seconds === undefined) { return '—'; }
+                if (seconds < 1) { return 'under a second'; }
+                if (seconds < 60) { return Math.round(seconds) + 's'; }
+                if (seconds < 3600) {
+                    return Math.floor(seconds / 60) + 'm ' + Math.round(seconds % 60) + 's';
+                }
+                return Math.floor(seconds / 3600) + 'h ' + Math.round((seconds % 3600) / 60) + 'm';
+            }
+
+            /*
+             * The estimate, worded the way the server words it.
+             *
+             * Coarser the further out it looks, because a run with two hours to go
+             * does not know that to the second and printing "1h 58m 12s" would claim
+             * a precision the arithmetic has not got. Mirrors RunEstimate.Describe;
+             * the seconds cross the wire so the page can re-render between polls
+             * without the number visibly freezing.
+             */
+            function describeEta(seconds) {
+                if (seconds === null || seconds === undefined) { return 'estimating…'; }
+                if (seconds < 10) { return 'almost done'; }
+                if (seconds < 90) { return 'about ' + (Math.round(seconds / 10) * 10) + ' seconds left'; }
+                if (seconds < 5400) { return 'about ' + Math.round(seconds / 60) + ' minutes left'; }
+                var hours = seconds / 3600;
+                return hours < 10
+                    ? 'about ' + (Math.round(hours * 10) / 10) + ' hours left'
+                    : 'about ' + Math.round(hours) + ' hours left';
+            }
+
+            function relativeTime(iso) {
+                if (!iso) { return 'unknown'; }
+                var then = new Date(iso).getTime();
+                if (isNaN(then)) { return 'unknown'; }
+                var delta = (Date.now() - then) / 1000;
+                if (delta < 60) { return 'just now'; }
+                if (delta < 3600) { return Math.floor(delta / 60) + ' min ago'; }
+                if (delta < 86400) { return Math.floor(delta / 3600) + ' h ago'; }
+                if (delta < 604800) { return Math.floor(delta / 86400) + ' d ago'; }
+                return new Date(iso).toLocaleDateString();
+            }
+
+            function statusWord(status) {
+                switch (status) {
+                    case 'completed': return 'Completed';
+                    case 'failed': return 'Failed';
+                    case 'running': return 'Running';
+                    case 'cancelled': return 'Cancelled';
+                    case 'abandoned': return 'Abandoned';
+                    default: return 'Unknown';
+                }
+            }
+
+            function statAt(label, value) {
+                return '<div class="colStat"><span class="colStatValue">' + escapeHtml(value)
+                    + '</span><span class="colStatLabel">' + escapeHtml(label) + '</span></div>';
+            }
+
+            function renderProgress(run) {
+                var panel = page.querySelector('#ColoristProgress');
+
+                if (!run) {
+                    panel.classList.add('hide');
+                    return;
+                }
+
+                panel.classList.remove('hide');
+
+                var totals = run.Totals || {};
+                var deleting = run.Kind === 'delete';
+                var pct = Math.max(0, Math.min(100, run.Progress || 0));
+
+                page.querySelector('#ColoristPhase').textContent =
+                    deleting ? 'Deleting barcodes' : 'Sampling colour';
+
+                page.querySelector('#ColoristProgressSub').textContent = run.CurrentItem
+                    ? run.CurrentItem
+                    : (run.Total ? 'Working through ' + run.Total + ' items' : 'Preparing…');
+
+                page.querySelector('#ColoristPct').textContent = Math.round(pct) + '%';
+
+                var fill = page.querySelector('#ColoristFill');
+                fill.style.width = pct + '%';
+                // Pulse when nothing has completed yet: the bar is legitimately at
+                // zero for as long as the first film takes, and a bar sitting still
+                // at 0% is indistinguishable from a hang.
+                fill.classList.toggle('colPulsing', !run.Completed);
+
+                var stats = [
+                    statAt('of ' + (run.Total || 0), (run.Completed || 0)),
+                    statAt('', describeEta(run.EtaSeconds))
+                ];
+
+                if (run.ItemsPerMinute) {
+                    stats.push(statAt('per minute', (Math.round(run.ItemsPerMinute * 10) / 10)));
+                }
+
+                if (deleting) {
+                    stats.push(statAt('files removed', totals.FilesRemoved || 0));
+                } else {
+                    stats.push(statAt('generated', totals.Generated || 0));
+                    if (totals.Skipped) { stats.push(statAt('already had one', totals.Skipped)); }
+                    if (totals.Failed) { stats.push(statAt('failed', totals.Failed)); }
+                }
+
+                stats.push(statAt('elapsed', formatDuration(run.DurationSeconds)));
+
+                page.querySelector('#ColoristStats').innerHTML = stats.join('');
+            }
+
+            function settingsLine(run) {
+                var s = run.Settings;
+                if (!s) { return ''; }
+
+                if (run.Kind === 'delete') {
+                    return s.WriteImageSidecar
+                        ? 'Removed the colour data and the PNGs'
+                        : 'Removed the PNGs only';
+                }
+
+                var bits = [
+                    s.Strategy || 'unknown algorithm',
+                    (s.Columns || 0) + ' stripes',
+                    'crop ' + (s.CropMode || '?')
+                ];
+                if (s.KeyframesOnly) { bits.push('keyframes only'); }
+                if (s.ToneMapHdr) { bits.push('HDR tone mapped'); }
+                if (s.WriteImageSidecar) { bits.push('PNG written'); }
+                if (s.Force) { bits.push('forced'); }
+                if (s.Concurrency) { bits.push(s.Concurrency + ' at a time'); }
+
+                return bits.join(' · ');
+            }
+
+            function itemRows(items) {
+                return items.map(function (item) {
+                    var outcome = escapeHtml(item.Outcome);
+                    var detail = [];
+
+                    if (item.Samples) {
+                        detail.push(item.Samples + ' samples → ' + (item.Columns || 0) + ' stripes');
+                    }
+                    if (item.Files) { detail.push(item.Files + ' file' + (item.Files === 1 ? '' : 's')); }
+                    if (item.Crop) { detail.push('crop ' + item.Crop); }
+                    if (item.ToneMapping) { detail.push(item.ToneMapping); }
+                    if (item.BesideMedia === false) { detail.push('plugin data'); }
+                    if (item.Error) { detail.push(item.Error); }
+
+                    return '<tr>'
+                        + '<td class="colItemName">' + escapeHtml(item.Name) + '</td>'
+                        + '<td><span class="colOutcome colOutcome' + outcome + '">' + outcome + '</span></td>'
+                        + '<td>' + escapeHtml(formatDuration(item.Seconds)) + '</td>'
+                        + '<td>' + escapeHtml(detail.join(' · ')) + '</td>'
+                        + '</tr>';
+                }).join('');
+            }
+
+            function runDrawer(run) {
+                if (expandedRunId !== run.RunId) { return ''; }
+
+                var detail = runDetails[run.RunId];
+
+                if (!detail) {
+                    return '<div class="colDrawer"><p class="fieldDescription">Loading…</p></div>';
+                }
+
+                var items = detail.Items || [];
+                var body = '<div class="colDrawer">';
+                var line = settingsLine(detail);
+
+                if (line) { body += '<div class="colDrawerNote">' + escapeHtml(line) + '</div>'; }
+                if (detail.Error) {
+                    body += '<div class="colDrawerNote">' + escapeHtml(detail.Error) + '</div>';
+                }
+
+                if (!items.length) {
+                    body += '<p class="fieldDescription">Nothing was written on this run.</p></div>';
+                    return body;
+                }
+
+                body += '<div class="colItemScroll"><table class="colItemTable">'
+                    + '<thead><tr><th>Item</th><th>Outcome</th><th>Took</th><th>Detail</th></tr></thead>'
+                    + '<tbody>' + itemRows(items) + '</tbody></table></div>';
+
+                // Only items that did something get a line, so on a delete run across
+                // a whole library the count here is far below the number walked.
+                if (detail.Completed > items.length) {
+                    body += '<div class="colDrawerNote">'
+                        + escapeHtml(items.length + ' of ' + detail.Completed
+                            + ' items had something to record; the rest had nothing to do.')
+                        + '</div>';
+                }
+
+                return body + '</div>';
+            }
+
+            function renderRuns() {
+                var container = page.querySelector('#ColoristRuns');
+
+                if (!recentRuns.length) {
+                    container.innerHTML =
+                        '<p class="fieldDescription">No runs recorded yet.</p>';
+                    return;
+                }
+
+                container.innerHTML = '<div class="paperList">' + recentRuns.map(function (run) {
+                    var word = statusWord(run.Status);
+                    var totals = run.Totals || {};
+
+                    var meta = (run.Kind === 'delete' ? 'Delete' : 'Generate')
+                        + ' · ' + escapeHtml(run.Trigger || 'manual')
+                        + ' · ' + escapeHtml(formatDuration(run.DurationSeconds));
+
+                    if (run.Kind === 'delete') {
+                        meta += ' · ' + (totals.FilesRemoved || 0) + ' files removed';
+                    } else {
+                        meta += ' · ' + (totals.Generated || 0) + ' generated';
+                        if (totals.Failed) { meta += ', ' + totals.Failed + ' failed'; }
+                    }
+
+                    return '<div class="listItem listItem-border">'
+                        + '<div class="colRunRow">'
+                        + '<span class="colDot colDot' + escapeHtml(word) + '"></span>'
+                        + '<div class="listItemBody colRunBody">'
+                        + '<div class="listItemBodyText">' + escapeHtml(word) + ' · '
+                        + escapeHtml(relativeTime(run.StartedAt)) + '</div>'
+                        + '<div class="listItemBodyText secondary">' + meta + '</div>'
+                        + '</div>'
+                        + '<button is="emby-button" type="button" class="raised colRunToggle" '
+                        + 'data-id="' + escapeHtml(run.RunId) + '"><span>'
+                        + (expandedRunId === run.RunId ? 'Hide' : 'Details') + '</span></button>'
+                        + '</div>'
+                        + runDrawer(run)
+                        + '</div>';
+                }).join('') + '</div>';
+            }
+
+            function fetchRunDetail(runId) {
+                // A finished run's document never changes, so it is fetched once.
+                // The live one is refetched, because it grows as the run goes.
+                var live = recentRuns.some(function (r) {
+                    return r.RunId === runId && r.Status === 'running';
+                });
+
+                if (runDetails[runId] && !live) {
+                    renderRuns();
+                    return;
+                }
+
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Colorist/Runs/' + encodeURIComponent(runId)),
+                    dataType: 'json'
+                }).then(function (detail) {
+                    runDetails[runId] = detail;
+                    renderRuns();
+                }, function () {
+                    runDetails[runId] = { Items: [], Error: 'Could not load this run.' };
+                    renderRuns();
+                });
+            }
+
+            function refreshRuns() {
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Colorist/Runs?limit=5'),
+                    dataType: 'json'
+                }).then(function (runs) {
+                    recentRuns = runs || [];
+                    renderRuns();
+                }, function () {
+                    page.querySelector('#ColoristRuns').innerHTML =
+                        '<p class="fieldDescription">Could not load run history — see the server log.</p>';
+                });
+            }
+
+            page.querySelector('#ColoristRuns').addEventListener('click', function (event) {
+                var button = event.target.closest('.colRunToggle');
+                if (!button) { return; }
+
+                var id = button.getAttribute('data-id');
+                expandedRunId = expandedRunId === id ? null : id;
+                renderRuns();
+
+                if (expandedRunId) { fetchRunDetail(expandedRunId); }
+            });
+
+            /*
+             * One poll drives everything.
+             *
+             * Two seconds while a run is going, because the status is served from the
+             * store's in-memory snapshot — the poll costs a lock, not a file read.
+             * When idle it stops entirely rather than ticking forever: a settings page
+             * left open in a background tab should not talk to the server all day.
+             *
+             * Two things this has to survive, both of which stopped it dead before:
+             *
+             *   Queueing is not starting. Pressing the button hands the job to
+             *   Jellyfin's task manager and returns; the task takes a moment to
+             *   actually begin. A poll landing in that gap sees an idle server, and
+             *   if idle simply meant "stop", the loop would end just as the run
+             *   began and the panel would never appear.  awaitingStart keeps it
+             *   polling through that window.
+             *
+             *   Overlapping chains. pageshow, the post-click nudge and the running
+             *   chain can all call this. Each generation invalidates the last, so
+             *   two chains can never both be scheduling — and, more to the point, a
+             *   stale one can never clear the live one's timer on its way out.
+             */
+            var pollGeneration = 0;
+            var awaitingStart = 0;
+
+            function scheduleNext(delay, generation) {
+                if (generation !== pollGeneration) { return; }
+                if (statusTimer) { clearTimeout(statusTimer); }
+                statusTimer = setTimeout(function () { pollStatus(generation); }, delay);
+            }
+
+            function pollStatus(generation) {
+                if (generation === undefined) {
+                    // A fresh caller: retire whatever chain was running.
+                    pollGeneration++;
+                    generation = pollGeneration;
+                    if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+                } else if (generation !== pollGeneration) {
+                    return Promise.resolve();
+                }
+
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Colorist/Status'),
+                    dataType: 'json'
+                }).then(function (status) {
+                    if (generation !== pollGeneration) { return; }
+
+                    var running = status && status.IsRunning;
+
+                    renderProgress(running ? status.CurrentRun : null);
+                    page.querySelector('#ColoristRunAll').disabled = !!running;
+                    page.querySelector('#ColoristDeleteAll').disabled = !!running;
+
+                    if (running) {
+                        wasRunning = true;
+                        awaitingStart = 0;
+
+                        // Keep the row in the list moving with the panel, and the
+                        // drawer too when it is the open one.
+                        refreshRuns();
+                        if (expandedRunId === status.CurrentRun.RunId) {
+                            fetchRunDetail(expandedRunId);
+                        }
+
+                        scheduleNext(2000, generation);
+                        return;
+                    }
+
+                    if (wasRunning) {
+                        // The run just ended. Its file is written by now, so pull the
+                        // history once more and leave the poll stopped.
+                        wasRunning = false;
+                        awaitingStart = 0;
+                        if (expandedRunId) { delete runDetails[expandedRunId]; }
+                        page.querySelector('#ColoristRunStatus').textContent = 'Finished.';
+                        refreshRuns();
+                        return;
+                    }
+
+                    if (awaitingStart > 0) {
+                        awaitingStart--;
+                        scheduleNext(1500, generation);
+                    }
+                }, function () {
+                    // No server, no permission, or an older build without the
+                    // endpoint. Stop polling rather than retrying into a wall.
+                    if (generation === pollGeneration) {
+                        awaitingStart = 0;
+                        renderProgress(null);
+                    }
+                });
+            }
+
+            /*
+             * Called after queueing. Twenty attempts at a second and a half is thirty
+             * seconds of grace, which is far longer than the task manager needs but
+             * short enough that a job which never starts stops being polled for.
+             */
+            function watchForStart() {
+                awaitingStart = 20;
+                pollStatus();
+            }
 
             /*
              * The delete button arms on the first click and fires on the second.
@@ -694,7 +1232,8 @@
                         url: ApiClient.getUrl('Colorist/Delete')
                     });
                 }).then(function () {
-                    status.textContent = 'Queued. Progress appears under Dashboard → Scheduled Tasks.';
+                    status.textContent = 'Queued.';
+                    watchForStart();
                 }, function () {
                     status.textContent = 'Could not queue the task — see the server log.';
                 });

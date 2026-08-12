@@ -33,6 +33,34 @@ namespace Jellyfin.Plugin.Colorist.Services
         Failed,
     }
 
+    /// <summary>
+    /// What happened to one item, in enough detail for a run log to be worth reading.
+    /// </summary>
+    /// <param name="Outcome">The headline.</param>
+    /// <param name="Samples">Frames actually sampled.</param>
+    /// <param name="Columns">Stripes the samples were binned into.</param>
+    /// <param name="Crop">The crop applied, as an ffmpeg filter string.</param>
+    /// <param name="ToneMapping">The HDR conversion used, when one was.</param>
+    /// <param name="Path">Where the barcode was written.</param>
+    /// <param name="BesideMedia">Whether that was the library folder rather than plugin data.</param>
+    /// <param name="Error">Why it failed, when it did.</param>
+    /// <remarks>
+    /// Everything past <paramref name="Outcome"/> is null unless the item generated,
+    /// because there is nothing to report about an item that was skipped. The
+    /// distinction between samples and columns is the interesting one to record: they
+    /// differ when a film had fewer keyframes than the configured stripe count, which
+    /// is the usual explanation for a barcode that looks coarser than expected.
+    /// </remarks>
+    public readonly record struct BarcodeReport(
+        BarcodeOutcome Outcome,
+        int? Samples = null,
+        int? Columns = null,
+        string? Crop = null,
+        string? ToneMapping = null,
+        string? Path = null,
+        bool? BesideMedia = null,
+        string? Error = null);
+
     /// <summary>Generates barcodes for items.</summary>
     public sealed class BarcodeService
     {
@@ -127,7 +155,7 @@ namespace Jellyfin.Plugin.Colorist.Services
         /// <param name="force">Regenerate even if one exists.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>What happened.</returns>
-        public async Task<BarcodeOutcome> GenerateAsync(
+        public async Task<BarcodeReport> GenerateAsync(
             BaseItem item,
             bool force,
             CancellationToken cancellationToken)
@@ -137,12 +165,12 @@ namespace Jellyfin.Plugin.Colorist.Services
 
             if (string.IsNullOrEmpty(mediaPath))
             {
-                return BarcodeOutcome.Ineligible;
+                return new BarcodeReport(BarcodeOutcome.Ineligible);
             }
 
             if (!force && _store.Exists(item.Id, mediaPath))
             {
-                return BarcodeOutcome.Skipped;
+                return new BarcodeReport(BarcodeOutcome.Skipped);
             }
 
             try
@@ -161,11 +189,11 @@ namespace Jellyfin.Plugin.Colorist.Services
                 // path that vanished mid-run, a permission that changed — must cost
                 // that item and not the run.
                 _logger.LogError(ex, "Colorist: failed to generate a barcode for {Name}", item.Name);
-                return BarcodeOutcome.Failed;
+                return new BarcodeReport(BarcodeOutcome.Failed, Error: ex.Message);
             }
         }
 
-        private async Task<BarcodeOutcome> GenerateCoreAsync(
+        private async Task<BarcodeReport> GenerateCoreAsync(
             BaseItem item,
             string mediaPath,
             PluginConfiguration configuration,
@@ -198,7 +226,7 @@ namespace Jellyfin.Plugin.Colorist.Services
                     item.Name,
                     runtimeSeconds.ToString("0.#", CultureInfo.InvariantCulture));
 
-                return BarcodeOutcome.Ineligible;
+                return new BarcodeReport(BarcodeOutcome.Ineligible);
             }
 
             var crop = await ResolveCropAsync(mediaPath, plan.Value, info, configuration, cancellationToken)
@@ -226,14 +254,14 @@ namespace Jellyfin.Plugin.Colorist.Services
 
             if (samples.Count == 0)
             {
-                return BarcodeOutcome.Ineligible;
+                return new BarcodeReport(BarcodeOutcome.Ineligible);
             }
 
             var columns = ColumnBinner.Bin(samples, plan.Value.Columns, plan.Value.DurationSeconds);
 
             if (columns.Count == 0)
             {
-                return BarcodeOutcome.Ineligible;
+                return new BarcodeReport(BarcodeOutcome.Ineligible);
             }
 
             // What gets stored is the measurement. Stripe width, blending and height
@@ -260,7 +288,14 @@ namespace Jellyfin.Plugin.Colorist.Services
                 columns.Count,
                 stored.Path);
 
-            return BarcodeOutcome.Generated;
+            return new BarcodeReport(
+                BarcodeOutcome.Generated,
+                Samples: samples.Count,
+                Columns: columns.Count,
+                Crop: crop?.ToFilter(),
+                ToneMapping: toneMapping == ToneMapping.None ? null : toneMapping.ToString(),
+                Path: stored.Path,
+                BesideMedia: stored.BesideMedia);
         }
 
         /// <summary>

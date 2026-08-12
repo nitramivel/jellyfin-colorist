@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Colorist.Configuration;
+using Jellyfin.Plugin.Colorist.Core.Runs;
+using Jellyfin.Plugin.Colorist.Services.Runs;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -28,19 +31,23 @@ namespace Jellyfin.Plugin.Colorist.Services
     {
         private readonly BarcodeService _service;
         private readonly BarcodeStore _store;
+        private readonly RunLogStore _runs;
         private readonly ILogger<DeleteBarcodesTask> _logger;
 
         /// <summary>Initialises a new instance of the <see cref="DeleteBarcodesTask"/> class.</summary>
         /// <param name="service">Used to enumerate the library.</param>
         /// <param name="store">Where barcodes are removed from.</param>
+        /// <param name="runs">Where the run is recorded.</param>
         /// <param name="logger">The logger.</param>
         public DeleteBarcodesTask(
             BarcodeService service,
             BarcodeStore store,
+            RunLogStore runs,
             ILogger<DeleteBarcodesTask> logger)
         {
             _service = service;
             _store = store;
+            _runs = runs;
             _logger = logger;
         }
 
@@ -75,7 +82,13 @@ namespace Jellyfin.Plugin.Colorist.Services
             // for. Turning episodes off and then deleting must still remove the
             // episode barcodes already on disk — otherwise the setting quietly
             // decides what the delete button is allowed to reach.
+            using var run = _runs.Begin(RunKind.Delete, RunTrigger.Scheduled);
+
+            run.Configure(new RunSettings(WriteImageSidecar: !imagesOnly));
+
             var items = _service.GetAllItems();
+            run.Plan(items.Count);
+
             var removed = 0;
             var completed = 0;
 
@@ -84,30 +97,73 @@ namespace Jellyfin.Plugin.Colorist.Services
                 imagesOnly ? "rendered images" : "all barcodes",
                 items.Count);
 
-            foreach (var item in items)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                removed += _store.Delete(item.Id, item.Path, imagesOnly);
-
-                completed++;
-
-                // Reported per item rather than per file, and capped just below the
-                // end: the orphan sweep still has to run, and a bar that reads 100%
-                // while work continues is worse than one that reads 99%.
-                if (items.Count > 0)
+                foreach (var item in items)
                 {
-                    progress.Report(completed * 99d / items.Count);
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var name = item.Name ?? "Unnamed item";
+                    run.Begin(name);
+
+                    var started = Stopwatch.GetTimestamp();
+                    var count = _store.Delete(item.Id, item.Path, imagesOnly);
+                    removed += count;
+
+                    // Only items that actually held something are recorded. A delete
+                    // run walks the whole library, and a log with twenty thousand
+                    // lines saying "nothing here" would bury the few hundred saying
+                    // what was removed.
+                    if (count > 0)
+                    {
+                        run.Finish(new RunItem(
+                            name,
+                            item.Id,
+                            "Removed",
+                            Stopwatch.GetElapsedTime(started).TotalSeconds,
+                            Path: item.Path,
+                            Files: count));
+                    }
+                    else
+                    {
+                        run.Skip();
+                    }
+
+                    completed++;
+
+                    // Reported per item rather than per file, and capped just below
+                    // the end: the orphan sweep still has to run, and a bar that
+                    // reads 100% while work continues is worse than one at 99%.
+                    if (items.Count > 0)
+                    {
+                        progress.Report(completed * 99d / items.Count);
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                run.Cancel();
+                throw;
             }
 
             var orphans = _store.SweepDataDirectory(imagesOnly);
+
+            if (orphans > 0)
+            {
+                run.Finish(new RunItem(
+                    "Orphaned barcodes in the plugin data directory",
+                    Guid.Empty,
+                    "Removed",
+                    0,
+                    Files: orphans));
+            }
 
             _logger.LogInformation(
                 "Colorist: removed {Removed} files across the library and {Orphans} left in plugin data",
                 removed.ToString(CultureInfo.InvariantCulture),
                 orphans.ToString(CultureInfo.InvariantCulture));
 
+            run.Complete();
             progress.Report(100);
 
             return Task.CompletedTask;

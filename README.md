@@ -132,6 +132,33 @@ them, and the colours cannot be recovered from a stretched, possibly blended ima
 Those items count as ungenerated and will be sampled again on the next run. The
 leftover PNGs are not in the way, but see below for clearing them out.
 
+## Watching a run
+
+**Colorist → Run** shows a live progress panel while a run is going: what is being
+sampled right now, how far through it is, how many items a minute it is getting
+through, and how long is left. It polls every two seconds, served from the run's
+in-memory state rather than by re-reading a file.
+
+The estimate is built from throughput — completions per wall-clock second over the
+last twenty — rather than from an average item duration, because items are sampled
+several at a time and a mean would overstate the answer by the concurrency factor. It
+is windowed because a library is not uniform: a run genuinely changes pace when it
+crosses from feature films into half-hour episodes. It is measured against the current
+moment rather than the last completion, so a run stalled on one enormous file shows a
+growing estimate instead of counting down through a hang. Nothing is shown until three
+items have finished; the first two are mostly startup cost.
+
+Under it, **Recent runs** lists the last five, newest first. Open one to see every item
+it touched: the outcome, how long it took, how many frames were sampled and how many
+stripes those became, the crop that was applied, any HDR conversion, whether it landed
+beside the media or in the plugin's data directory, and the reason for anything that
+failed.
+
+Runs are written to `<data>/colorist/runs/<run id>.json` and rotated at twenty. A run
+whose file still says `running` but which has no process behind it — a server restarted
+mid-run — is reported as **abandoned**, worked out when the file is read, because the
+one thing a process that has died cannot do is update its own file to say so.
+
 ### Deleting saved barcodes
 
 **Colorist → Run → Delete saved barcodes**, or the **Delete Barcodes** scheduled task.
@@ -171,6 +198,9 @@ does not have. Handing the problem to the OS scheduler is both honest and better
 | `GET /Colorist/Barcode/{itemId}` | Any signed-in user | The PNG, when one was written |
 | `GET /Colorist/Barcode/{itemId}/Exists` | Any signed-in user | Whether one exists, without transferring it |
 | `GET /Colorist/Version` | Admin | The running plugin version |
+| `GET /Colorist/Status` | Admin | The live run, with progress and time left |
+| `GET /Colorist/Runs?limit=5` | Admin | Recent run summaries, newest first |
+| `GET /Colorist/Runs/{runId}` | Admin | One run in full, every item it touched |
 | `POST /Colorist/Generate` | Admin | Queue a full run |
 | `POST /Colorist/Generate/{itemId}` | Admin | Build one item now |
 | `POST /Colorist/Delete` | Admin | Queue removal of every saved barcode |
