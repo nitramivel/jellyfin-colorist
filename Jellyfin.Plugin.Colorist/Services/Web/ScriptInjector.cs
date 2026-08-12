@@ -47,6 +47,9 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
         [GeneratedRegex(@"var DISPLAY_HEIGHT = \d+;")]
         private static partial Regex DisplayHeightLine();
 
+        [GeneratedRegex(@"var SMOOTH = (?:true|false);")]
+        private static partial Regex SmoothLine();
+
         /// <summary>
         /// The script's content hash, used as both cache-buster and entity tag.
         /// </summary>
@@ -104,16 +107,43 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
             var script = ReadScript();
             var configuration = Plugin.Instance?.Configuration;
 
-            if (script.Length == 0 || configuration is null)
-            {
-                return script;
-            }
+            return script.Length == 0 || configuration is null
+                ? script
+                : Apply(script, configuration.DisplayHeight, configuration.Smooth);
+        }
 
-            var height = Math.Clamp(configuration.DisplayHeight, 20, 400);
+        /// <summary>
+        /// Substitutes the display settings into the script.
+        /// </summary>
+        /// <param name="script">The script as it sits in the assembly.</param>
+        /// <param name="displayHeight">The strip's height in CSS pixels; clamped here.</param>
+        /// <param name="smooth">Whether stripes blend into each other.</param>
+        /// <returns>The script as it should be served.</returns>
+        /// <remarks>
+        /// Split from <see cref="Configured"/> so it can be tested: that method reads
+        /// <c>Plugin.Instance</c>, which does not exist without a server, and this is
+        /// the only route either setting has to the page. Both are substituted rather
+        /// than sent with the colours because they are properties of the server's
+        /// configuration, not of the item — putting them in the per-item response
+        /// would mean every detail page fetched the same answer again, and putting
+        /// them in a request of their own would mean two.
+        /// <para>
+        /// A miss is silent by nature: the regexes match a declaration in another
+        /// file, so rewording it leaves the script valid and the setting inert. That
+        /// is what the tests around this are for.
+        /// </para>
+        /// </remarks>
+        public static string Apply(string script, int displayHeight, bool smooth)
+        {
+            var height = Math.Clamp(displayHeight, 20, 400);
 
-            return DisplayHeightLine().Replace(
+            script = DisplayHeightLine().Replace(
                 script,
                 "var DISPLAY_HEIGHT = " + height.ToString(CultureInfo.InvariantCulture) + ";");
+
+            return SmoothLine().Replace(
+                script,
+                "var SMOOTH = " + (smooth ? "true" : "false") + ";");
         }
 
         /// <summary>

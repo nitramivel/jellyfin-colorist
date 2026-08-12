@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Colorist.Configuration;
+using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Core.Color;
 using Jellyfin.Plugin.Colorist.Core.Imaging;
 using Jellyfin.Plugin.Colorist.Core.Sampling;
@@ -217,15 +219,19 @@ namespace Jellyfin.Plugin.Colorist.Services
                 return BarcodeOutcome.Ineligible;
             }
 
-            var width = Math.Clamp(configuration.OutputWidth, 64, 8000);
-            var height = Math.Clamp(configuration.OutputHeight, 16, 2000);
+            // What gets stored is the measurement. Stripe width, blending and height
+            // are decisions the detail page makes when it draws, so changing any of
+            // them costs a page reload rather than another pass over the library.
+            var data = Encoding.UTF8.GetBytes(BarcodeData.Serialize(columns));
 
-            var pixels = BarcodeComposer.Compose(columns, width, height, configuration.Smooth);
-            var png = PngWriter.Encode(pixels, width, height);
+            var png = configuration.WriteImageSidecar
+                ? RenderImage(columns, configuration)
+                : null;
 
             var stored = await _store.SaveAsync(
                 item.Id,
                 mediaPath,
+                data,
                 png,
                 configuration.WriteBesideMedia,
                 cancellationToken).ConfigureAwait(false);
@@ -238,6 +244,26 @@ namespace Jellyfin.Plugin.Colorist.Services
                 stored.Path);
 
             return BarcodeOutcome.Generated;
+        }
+
+        /// <summary>
+        /// Renders the optional PNG beside the colour data.
+        /// </summary>
+        /// <remarks>
+        /// Off by default. The strip on the detail page is drawn from the colour
+        /// data, so nothing in the plugin reads this file — it exists for people who
+        /// want a picture in the movie folder that other tools can open, and its
+        /// dimensions and blending are frozen at whatever they were when it was
+        /// written.
+        /// </remarks>
+        private static byte[] RenderImage(IReadOnlyList<Rgb> columns, PluginConfiguration configuration)
+        {
+            var width = Math.Clamp(configuration.OutputWidth, 64, 8000);
+            var height = Math.Clamp(configuration.OutputHeight, 16, 2000);
+
+            var pixels = BarcodeComposer.Compose(columns, width, height, configuration.Smooth);
+
+            return PngWriter.Encode(pixels, width, height);
         }
 
         private async Task<CropRect?> ResolveCropAsync(

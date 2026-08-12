@@ -22,13 +22,17 @@ namespace Jellyfin.Plugin.Colorist.Core
         /// <summary>The suffix appended before the extension.</summary>
         public const string Suffix = "-colorist";
 
-        /// <summary>The extension, including the dot.</summary>
-        public const string Extension = ".png";
+        /// <summary>The extension of the colour data, including the dot.</summary>
+        public const string DataExtension = ".json";
+
+        /// <summary>The extension of the optional rendered image, including the dot.</summary>
+        public const string ImageExtension = ".png";
 
         /// <summary>
         /// The sidecar path for a video, beside the video itself.
         /// </summary>
         /// <param name="mediaPath">Full path to the video file.</param>
+        /// <param name="extension">Which sidecar is wanted, including the dot.</param>
         /// <returns>The barcode path, or null when the media path is unusable.</returns>
         /// <remarks>
         /// Derived from the video's own filename rather than from the item's title.
@@ -37,7 +41,7 @@ namespace Jellyfin.Plugin.Colorist.Core
         /// the moment two items disagreed about their numbering. The video filename is
         /// already unique within its folder, by definition of being a filename.
         /// </remarks>
-        public static string? ForMedia(string? mediaPath)
+        public static string? ForMedia(string? mediaPath, string extension)
         {
             if (string.IsNullOrWhiteSpace(mediaPath))
             {
@@ -64,7 +68,7 @@ namespace Jellyfin.Plugin.Colorist.Core
                 return null;
             }
 
-            return Path.Combine(directory, stem + Suffix + Extension);
+            return Path.Combine(directory, stem + Suffix + extension);
         }
 
         /// <summary>
@@ -72,6 +76,7 @@ namespace Jellyfin.Plugin.Colorist.Core
         /// </summary>
         /// <param name="dataRoot">The plugin data directory.</param>
         /// <param name="itemId">The Jellyfin item ID.</param>
+        /// <param name="extension">Which sidecar is wanted, including the dot.</param>
         /// <returns>The fallback barcode path.</returns>
         /// <remarks>
         /// Used when the library folder cannot be written to, which is the normal
@@ -85,11 +90,11 @@ namespace Jellyfin.Plugin.Colorist.Core
         /// painful on some.
         /// </para>
         /// </remarks>
-        public static string ForFallback(string dataRoot, Guid itemId)
+        public static string ForFallback(string dataRoot, Guid itemId, string extension)
         {
             var id = itemId.ToString("N", CultureInfo.InvariantCulture);
 
-            return Path.Combine(dataRoot, "barcodes", id[..2], id + Extension);
+            return Path.Combine(dataRoot, "barcodes", id[..2], id + extension);
         }
 
         /// <summary>

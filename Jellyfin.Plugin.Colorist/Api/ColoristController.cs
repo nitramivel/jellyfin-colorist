@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Services;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Library;
@@ -47,21 +48,48 @@ namespace Jellyfin.Plugin.Colorist.Api
             _logger = logger;
         }
 
-        /// <summary>Serves an item's barcode.</summary>
+        /// <summary>Serves an item's colour data.</summary>
         /// <param name="itemId">The item.</param>
-        /// <returns>The PNG, or 404 when the item has none.</returns>
+        /// <returns>The colours, or 404 when the item has none.</returns>
         /// <remarks>
         /// <b>Deliberately not admin-only.</b> Every viewer's browser fetches this to
         /// draw the strip on a detail page, so requiring elevation would mean the
-        /// feature simply does not appear for anyone but the owner. It exposes one
-        /// derived image per item and no metadata beyond what the same user can
-        /// already see.
+        /// feature simply does not appear for anyone but the owner. It exposes a few
+        /// thousand colours sampled from a film the same user can already watch.
         /// <para>
         /// Bare <c>[Authorize]</c>, which applies the server's default policy —
         /// authenticated, no further requirement. There is no
         /// <c>Policies.DefaultAuthorization</c> constant on 10.11; the constants that
         /// do exist all name a specific elevated capability.
         /// </para>
+        /// <para>
+        /// The 404 is the existence check. Being JSON, this is fetched through
+        /// <c>ApiClient</c> with a real <c>Authorization</c> header, so the client
+        /// can ask for the data itself rather than asking whether to ask — one round
+        /// trip per page instead of two, and no access token in a URL.
+        /// </para>
+        /// </remarks>
+        [HttpGet("Barcode/{itemId}/Colors")]
+        [Authorize]
+        [Produces(BarcodeData.MediaType)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public ActionResult GetBarcodeColors([FromRoute] Guid itemId)
+        {
+            var item = _libraryManager.GetItemById(itemId);
+            var path = _store.Locate(itemId, item?.Path);
+
+            return path is null ? NotFound() : ServeFile(path, BarcodeData.MediaType);
+        }
+
+        /// <summary>Serves an item's rendered barcode image.</summary>
+        /// <param name="itemId">The item.</param>
+        /// <returns>The PNG, or 404 when the item has none.</returns>
+        /// <remarks>
+        /// Only answers for items whose barcode was generated with image output
+        /// switched on, which is not the default — the detail page draws from the
+        /// colour data and never comes here. It stays because a stable URL for the
+        /// picture is useful to anyone embedding a strip somewhere else.
         /// </remarks>
         [HttpGet("Barcode/{itemId}")]
         [Authorize]
@@ -71,20 +99,20 @@ namespace Jellyfin.Plugin.Colorist.Api
         public ActionResult GetBarcode([FromRoute] Guid itemId)
         {
             var item = _libraryManager.GetItemById(itemId);
-            var path = _store.Locate(itemId, item?.Path);
+            var path = _store.LocateImage(itemId, item?.Path);
 
-            if (path is null)
-            {
-                return NotFound();
-            }
+            return path is null ? NotFound() : ServeFile(path, "image/png");
+        }
 
+        private ActionResult ServeFile(string path, string mediaType)
+        {
             var info = new FileInfo(path);
 
             // Revalidated rather than blindly cached. A barcode is fetched on every
             // visit to every detail page, so answering most of those with a 304 is
             // worth the entity tag — and tagging on size and modification time means
             // regenerating an item invalidates it immediately, which matters because
-            // the URL does not change when the image does.
+            // the URL does not change when the colours do.
             var entityTag = new EntityTagHeaderValue(
                 "\"" + info.Length.ToString("x", CultureInfo.InvariantCulture)
                      + "-" + info.LastWriteTimeUtc.Ticks.ToString("x", CultureInfo.InvariantCulture)
@@ -98,17 +126,18 @@ namespace Jellyfin.Plugin.Colorist.Api
                 bufferSize: 64 * 1024,
                 useAsync: true);
 
-            return File(stream, "image/png", info.LastWriteTimeUtc, entityTag);
+            return File(stream, mediaType, info.LastWriteTimeUtc, entityTag);
         }
 
         /// <summary>Reports whether an item has a barcode, without transferring it.</summary>
         /// <param name="itemId">The item.</param>
         /// <returns>A small JSON object.</returns>
         /// <remarks>
-        /// The client script asks this before adding anything to the page, so an item
-        /// without a barcode gets no empty container and no broken image — just
-        /// nothing, which is the correct appearance for a film that has not been
-        /// processed yet.
+        /// No longer on the detail page's path — the colours endpoint answers that
+        /// question with its status code, in the request that also fetches the data.
+        /// Kept because "has this item been processed" is the one thing a script
+        /// checking on a library run wants, and a few thousand colours is a lot to
+        /// transfer per item to find out.
         /// </remarks>
         [HttpGet("Barcode/{itemId}/Exists")]
         [Authorize]

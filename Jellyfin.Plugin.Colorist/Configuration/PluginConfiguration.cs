@@ -52,13 +52,32 @@ namespace Jellyfin.Plugin.Colorist.Configuration
         /// </remarks>
         public bool KeyframesOnly { get; set; } = true;
 
-        /// <summary>Gets or sets the output width in pixels.</summary>
+        /// <summary>
+        /// Gets or sets whether a PNG is written alongside the colour data.
+        /// </summary>
+        /// <remarks>
+        /// Off by default, and nothing in the plugin reads it. A barcode is stored as
+        /// the colours that were measured, which is what the detail page draws from
+        /// and what makes <see cref="Smooth"/>, <see cref="OutputWidth"/> and
+        /// <see cref="OutputHeight"/> cost a page reload rather than another pass of
+        /// ffmpeg over the library. This switch exists for people who want a file in
+        /// the movie folder that other software can open; the image it produces is
+        /// frozen at the settings in force when it was written.
+        /// </remarks>
+        public bool WriteImageSidecar { get; set; }
+
+        /// <summary>Gets or sets the width of the optional PNG, in pixels.</summary>
         public int OutputWidth { get; set; } = 1920;
 
-        /// <summary>Gets or sets the output height in pixels.</summary>
+        /// <summary>Gets or sets the height of the optional PNG, in pixels.</summary>
         public int OutputHeight { get; set; } = 240;
 
         /// <summary>Gets or sets whether stripes blend into each other.</summary>
+        /// <remarks>
+        /// Applies to the strip on the detail page and to the optional PNG alike. The
+        /// page reads this through the client script, so changing it takes effect on
+        /// the next page load without regenerating anything.
+        /// </remarks>
         public bool Smooth { get; set; }
 
         /// <summary>Gets or sets how black bars are handled.</summary>

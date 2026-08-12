@@ -10,9 +10,9 @@ runtime — then shows it at the foot of the movie or episode page.
 
 - Samples frames across each movie and episode with ffmpeg
 - Reduces every sampled frame to one representative colour
-- Writes a PNG next to the media file, or to the plugin's data directory when the
-  library is read-only
-- Adds the strip to the bottom of the detail page in the web client
+- Stores those colours next to the media file, or in the plugin's data directory when
+  the library is read-only — a small JSON file, not a picture
+- Draws the strip across the foot of the detail page in the web client, edge to edge
 
 ## Install
 
@@ -96,14 +96,40 @@ credits.
 
 ## Where files go
 
-`<video filename>-colorist.png`, beside the video — the movie folder for films, the
+`<video filename>-colorist.json`, beside the video — the movie folder for films, the
 season folder for episodes. The `-colorist` suffix is not one Jellyfin's image
-scanner recognises, so a barcode is never adopted as the item's poster or thumbnail.
+scanner recognises, so nothing Colorist writes is ever adopted as the item's poster
+or thumbnail.
 
-If the folder cannot be written — a read-only bind mount, commonly — the image goes
-to the plugin's data directory instead and still displays normally. The detail page
-asks the API for it by item ID rather than guessing a path, so it never needs to know
-which location was used.
+If the folder cannot be written — a read-only bind mount, commonly — the file goes to
+the plugin's data directory instead and the barcode still displays normally. The
+detail page asks the API for it by item ID rather than guessing a path, so it never
+needs to know which location was used.
+
+### Colours, not a picture
+
+What gets stored is the measurement: one packed hex triplet per stripe, about 6 KB
+for the default thousand columns.
+
+```json
+{"v":1,"colors":"1a2b3c2f3d4e…"}
+```
+
+The strip on the detail page is drawn from that, in the browser. Stripe width,
+blending and display height are therefore decisions made at draw time — change any of
+them and the next page load shows the difference, where baking them into an image
+meant another pass of ffmpeg across the library. It also means the request carries a
+real `Authorization` header, which an `<img>` cannot, so no access token has to travel
+in a URL.
+
+Set **Also write a PNG** if you want `<video filename>-colorist.png` in the folder as
+well. It is off by default and nothing in Jellyfin reads it; it exists for other
+software to open, and its size and blending are fixed at whatever they were when it
+was written. Turning it off removes the PNGs as items are regenerated.
+
+Upgrading from 0.1: barcodes made by that version are PNGs with no colour data behind
+them, and the colours cannot be recovered from a stretched, possibly blended image.
+Those items count as ungenerated and will be sampled again on the next run.
 
 ## Not competing with playback
 
@@ -120,15 +146,21 @@ does not have. Handing the problem to the OS scheduler is both honest and better
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /Colorist/Barcode/{itemId}` | Any signed-in user | The PNG |
+| `GET /Colorist/Barcode/{itemId}/Colors` | Any signed-in user | The colours — what the detail page draws |
+| `GET /Colorist/Barcode/{itemId}` | Any signed-in user | The PNG, when one was written |
 | `GET /Colorist/Barcode/{itemId}/Exists` | Any signed-in user | Whether one exists, without transferring it |
 | `POST /Colorist/Generate` | Admin | Queue a full run |
 | `POST /Colorist/Generate/{itemId}` | Admin | Build one item now |
-| `DELETE /Colorist/Barcode/{itemId}` | Admin | Remove one |
+| `DELETE /Colorist/Barcode/{itemId}` | Admin | Remove one, both files |
 
-The two `GET`s are deliberately not admin-only — every viewer's browser fetches them
-to draw the strip, and requiring elevation would mean the feature only appears for
-the owner.
+The `GET`s are deliberately not admin-only — every viewer's browser fetches the
+colours to draw the strip, and requiring elevation would mean the feature only
+appears for the owner.
+
+`/Colors` answers 404 for an item that has not been generated, so the detail page
+does not need `/Exists` first: one round trip per page instead of two. `/Exists` is
+kept for scripts checking on a library run, where transferring every item's colours
+to find out would be absurd.
 
 ## Building
 
