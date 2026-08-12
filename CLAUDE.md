@@ -24,7 +24,7 @@ The .NET 9 SDK is installed per-user and is **not on `PATH` by default**:
 export PATH="$HOME/.dotnet:$PATH"     # required first, in every shell
 
 dotnet build Jellyfin.Plugin.Colorist.sln -c Release
-dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 173 tests, no network, no ffmpeg
+dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 185 tests, no network, no ffmpeg
 ./build/package.sh                                       # artifacts/Colorist_<version>/
 VERSION=0.2.0.0 CHANGELOG="..." ./build/release.sh       # zip + manifest.json entry
 ```
@@ -56,6 +56,7 @@ Services/      everything that touches a process, a file or Jellyfin
   BarcodeStore        sidecar write with data-directory fallback
   BarcodeService      orchestration, eligibility, crop resolution
   GenerateBarcodesTask  IScheduledTask, the only bulk path
+  DeleteBarcodesTask    IScheduledTask, no default triggers, the only bulk removal
   Web/ScriptInjector  IStartupFilter middleware, patches index.html
 Api/           ColoristController
 Web/           colorist.js, embedded
@@ -68,6 +69,15 @@ pure strings and asserted on. What is left unverified is genuinely only process
 execution and DOM manipulation.
 
 ## Decisions worth not relitigating
+
+**Deleting is scoped by configuration, not by the include switches.**
+`DeleteBarcodesTask` enumerates via `BarcodeService.GetAllItems`, which ignores
+`IncludeMovies`/`IncludeEpisodes` — those say what a *generation* run builds, and
+letting them gate a delete would strand thousands of files because a switch was
+flipped afterwards. Scope (everything vs. images only) rides in `DeleteImagesOnly`
+because a scheduled task takes no arguments; the settings page saves the
+configuration before queueing so the checkbox next to the button is what runs. The
+task has no default triggers on purpose.
 
 **The client draws the strip; the server does not.** `colorist.js` paints a canvas at
 one pixel per stripe for hard edges, or a `linear-gradient(to right in oklab, …)` for

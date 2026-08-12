@@ -142,6 +142,18 @@ namespace Jellyfin.Plugin.Colorist.Configuration
         /// <summary>Gets or sets whether existing barcodes are regenerated.</summary>
         public bool ForceRegenerate { get; set; }
 
+        /// <summary>
+        /// Gets or sets whether the delete task removes only the rendered PNGs.
+        /// </summary>
+        /// <remarks>
+        /// On by default, which makes the destructive button the least destructive
+        /// thing it could reasonably be: the common reason to run it is to clear out
+        /// images an older version scattered through library folders, and the colours
+        /// behind them cost hours of ffmpeg to rebuild. Turn it off to remove
+        /// everything Colorist has written.
+        /// </remarks>
+        public bool DeleteImagesOnly { get; set; } = true;
+
         /// <summary>Gets or sets whether episodes are included as well as movies.</summary>
         public bool IncludeEpisodes { get; set; } = true;
 

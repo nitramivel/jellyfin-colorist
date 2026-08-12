@@ -129,7 +129,28 @@ was written. Turning it off removes the PNGs as items are regenerated.
 
 Upgrading from 0.1: barcodes made by that version are PNGs with no colour data behind
 them, and the colours cannot be recovered from a stretched, possibly blended image.
-Those items count as ungenerated and will be sampled again on the next run.
+Those items count as ungenerated and will be sampled again on the next run. The
+leftover PNGs are not in the way, but see below for clearing them out.
+
+### Deleting saved barcodes
+
+**Colorist → Run → Delete saved barcodes**, or the **Delete Barcodes** scheduled task.
+It removes what Colorist has written from the library folders and from the plugin's
+data directory, across every movie and episode — including ones the include switches
+currently exclude, because a setting flipped afterwards should not decide what a
+delete is allowed to reach.
+
+**Delete only the PNGs, keep the colour data** is on by default and is the safe
+choice: it clears out images an older version scattered through library folders while
+leaving the measurements that cost hours of ffmpeg. Clear it to remove everything and
+start over.
+
+The button arms on the first click and fires on the second, saying which of the two it
+is about to do. Read-only folders are logged and skipped; the task reports how many
+files it actually removed rather than assuming. Orphaned sidecars beside media whose
+items have left the library are not reachable — finding those would mean walking every
+library folder looking for a filename pattern, and deleting files this plugin cannot
+tie back to anything Jellyfin still holds.
 
 ## Not competing with playback
 
@@ -149,8 +170,10 @@ does not have. Handing the problem to the OS scheduler is both honest and better
 | `GET /Colorist/Barcode/{itemId}/Colors` | Any signed-in user | The colours — what the detail page draws |
 | `GET /Colorist/Barcode/{itemId}` | Any signed-in user | The PNG, when one was written |
 | `GET /Colorist/Barcode/{itemId}/Exists` | Any signed-in user | Whether one exists, without transferring it |
+| `GET /Colorist/Version` | Admin | The running plugin version |
 | `POST /Colorist/Generate` | Admin | Queue a full run |
 | `POST /Colorist/Generate/{itemId}` | Admin | Build one item now |
+| `POST /Colorist/Delete` | Admin | Queue removal of every saved barcode |
 | `DELETE /Colorist/Barcode/{itemId}` | Admin | Remove one, both files |
 
 The `GET`s are deliberately not admin-only — every viewer's browser fetches the

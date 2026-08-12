@@ -140,17 +140,81 @@ namespace Jellyfin.Plugin.Colorist.Services
             return new StoredBarcode(fallback, false);
         }
 
-        /// <summary>Removes an item's barcode, both files, from both locations.</summary>
+        /// <summary>Removes an item's barcode from both locations.</summary>
         /// <param name="itemId">The Jellyfin item ID.</param>
         /// <param name="mediaPath">The item's media path.</param>
-        public void Delete(Guid itemId, string? mediaPath)
+        /// <param name="imagesOnly">Remove only the rendered PNG, keeping the colours.</param>
+        /// <returns>How many files were actually removed.</returns>
+        public int Delete(Guid itemId, string? mediaPath, bool imagesOnly = false)
         {
-            foreach (var extension in new[] { SidecarPaths.DataExtension, SidecarPaths.ImageExtension })
+            var removed = 0;
+
+            foreach (var extension in Extensions(imagesOnly))
             {
-                DiscardAt(SidecarPaths.ForMedia(mediaPath, extension), loud: true);
-                DiscardAt(SidecarPaths.ForFallback(DataRoot, itemId, extension), loud: true);
+                removed += DiscardAt(SidecarPaths.ForMedia(mediaPath, extension), loud: true) ? 1 : 0;
+                removed += DiscardAt(SidecarPaths.ForFallback(DataRoot, itemId, extension), loud: true) ? 1 : 0;
             }
+
+            return removed;
         }
+
+        /// <summary>
+        /// Removes everything left in the plugin's own data directory.
+        /// </summary>
+        /// <param name="imagesOnly">Remove only rendered PNGs, keeping the colours.</param>
+        /// <returns>How many files were removed.</returns>
+        /// <remarks>
+        /// The orphan sweep. Deleting item by item only reaches items the library
+        /// still knows about, so a film removed from Jellyfin leaves its fallback
+        /// barcode behind forever — nothing will ever ask for that ID again. Every
+        /// file under <c>barcodes/</c> was written by this plugin and is named after
+        /// an item ID, so the directory can be cleared wholesale.
+        /// <para>
+        /// There is no equivalent for sidecars beside media. Finding those would mean
+        /// walking every library folder on disk looking for a filename pattern, which
+        /// is a great deal of I/O for the sake of items that no longer exist — and it
+        /// would mean this plugin deleting files it cannot tie back to anything
+        /// Jellyfin currently holds. Orphaned sidecars are left alone.
+        /// </para>
+        /// </remarks>
+        public int SweepDataDirectory(bool imagesOnly)
+        {
+            var root = Path.Combine(DataRoot, "barcodes");
+
+            if (!Directory.Exists(root))
+            {
+                return 0;
+            }
+
+            var removed = 0;
+
+            foreach (var extension in Extensions(imagesOnly))
+            {
+                string[] files;
+
+                try
+                {
+                    files = Directory.GetFiles(root, "*" + extension, SearchOption.AllDirectories);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(ex, "Colorist: could not enumerate {Path}", root);
+                    continue;
+                }
+
+                foreach (var file in files)
+                {
+                    removed += DiscardAt(file, loud: true) ? 1 : 0;
+                }
+            }
+
+            return removed;
+        }
+
+        private static string[] Extensions(bool imagesOnly) =>
+            imagesOnly
+                ? [SidecarPaths.ImageExtension]
+                : [SidecarPaths.DataExtension, SidecarPaths.ImageExtension];
 
         private string? LocateWithExtension(Guid itemId, string? mediaPath, string extension)
         {
@@ -201,19 +265,30 @@ namespace Jellyfin.Plugin.Colorist.Services
             }
         }
 
-        private void DiscardAt(string? path, bool loud = false)
+        /// <summary>Removes one file if it is there.</summary>
+        /// <returns>Whether a file was actually deleted.</returns>
+        /// <remarks>
+        /// A read-only library folder makes this fail per file, and that is a
+        /// configuration rather than a fault — so the caller counts what it managed
+        /// rather than assuming, and a bulk delete reports the difference instead of
+        /// claiming a clean sweep it did not achieve.
+        /// </remarks>
+        private bool DiscardAt(string? path, bool loud = false)
         {
             if (path is null)
             {
-                return;
+                return false;
             }
 
             try
             {
-                if (File.Exists(path))
+                if (!File.Exists(path))
                 {
-                    File.Delete(path);
+                    return false;
                 }
+
+                File.Delete(path);
+                return true;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -225,6 +300,8 @@ namespace Jellyfin.Plugin.Colorist.Services
                 {
                     _logger.LogDebug(ex, "Colorist: could not clean up {Path}", path);
                 }
+
+                return false;
             }
         }
 

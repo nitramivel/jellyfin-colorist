@@ -10,6 +10,29 @@
         <div class="content-primary">
 
             <style>
+                /* Jellyfin's own stylesheet carries `.readOnlyContent,form{max-width:54em}`,
+                   which caps the form but not the tab bar above it — so the row of
+                   buttons runs wider than the panel beneath, which reads as a
+                   misalignment rather than as a design. Scoped by id so nothing else
+                   on the dashboard, and no other plugin's page, is affected. */
+                #ColoristConfigForm { max-width: none; }
+
+                /* Separates the save row from the first heading under it, which would
+                   otherwise read as a caption to the button. */
+                .colSaveRow { margin-bottom: 1.6em; }
+
+                /* The version badge. Its ABSENCE is the diagnostic: a config page
+                   cached from before this existed cannot render it, so a blank space
+                   next to the title means you are looking at an old page rather than
+                   at an old server. */
+                .colVersion {
+                    font-size: 0.6em;
+                    font-weight: normal;
+                    opacity: 0.6;
+                    vertical-align: middle;
+                    margin-left: 0.5em;
+                }
+
                 .colTabBar { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 1em 0 1.5em 0; }
                 .colTabBar .colTabButton { margin: 0; }
                 .colTabButton.colTabActive { background: #00a4dc; color: #fff; }
@@ -35,7 +58,23 @@
                     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
                     gap: 0 1.4em;
                 }
+                /* The one irreversible control on the page, marked as such. */
+                .colDanger {
+                    border-color: rgba(229,57,53,0.45);
+                    background: rgba(229,57,53,0.06);
+                }
+                .colDangerButton { background: #c62828; color: #fff; }
+                .colDangerButton.colArmed { background: #8e0000; }
             </style>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Colorist <span id="ColoristVersion" class="colVersion"></span></h2>
+                <p class="fieldDescription">
+                    Samples colour across every movie and episode with ffmpeg, reduces each sampled frame to
+                    one representative colour, and draws the sequence as a vertical-stripe barcode across the
+                    foot of the detail page.
+                </p>
+            </div>
 
             <div class="colTabBar">
                 <button is="emby-button" type="button" class="raised colTabButton colTabActive" data-panel="colour">Colour</button>
@@ -45,6 +84,18 @@
             </div>
 
             <form id="ColoristConfigForm">
+
+                <!-- Above the panels rather than below them. A submit button works
+                     from anywhere inside the form, so its position is purely a
+                     question of where a hand reaches for it — and at the bottom it is
+                     a scroll away from wherever the change was just made, which on
+                     the Run tab means past three action cards. One row, shared by
+                     every tab. -->
+                <div id="ColoristSaveRow" class="colSaveRow">
+                    <button is="emby-button" type="submit" class="raised button-submit block">
+                        <span>Save</span>
+                    </button>
+                </div>
 
                 <!-- ================= COLOUR ================= -->
                 <div class="colPanel colPanelActive" data-panel="colour">
@@ -342,12 +393,35 @@
                         <canvas id="ColoristPreviewImage" class="colPreview"
                                 aria-label="Barcode preview" role="img"></canvas>
                     </div>
+
+                    <div class="colCard colDanger">
+                        <div class="colCardTitle">Delete saved barcodes</div>
+                        <div class="fieldDescription colNote" style="margin-top:0">
+                            Removes what Colorist has written, from the library folders and from the plugin's
+                            data directory, across every movie and episode &mdash; including ones the
+                            include switches above currently exclude. Runs as a background task; watch it
+                            under Dashboard &rarr; Scheduled Tasks. Read-only folders are reported in the
+                            log and skipped.
+                        </div>
+
+                        <label class="checkboxContainer">
+                            <input is="emby-checkbox" type="checkbox" id="DeleteImagesOnly" name="DeleteImagesOnly" />
+                            <span>Delete only the PNGs, keep the colour data</span>
+                        </label>
+                        <div class="fieldDescription colNote">
+                            On by default, and the safe choice. The colours are what the detail page draws
+                            and they cost hours of ffmpeg to rebuild; the PNGs are an optional extra nothing
+                            in Jellyfin reads. Clear this to remove everything and start over &mdash; every
+                            barcode will need sampling again.
+                        </div>
+
+                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="raised block colDangerButton">
+                            <span>Delete saved barcodes</span>
+                        </button>
+                        <div id="ColoristDeleteStatus" class="colStatusLine"></div>
+                    </div>
                 </div>
 
-                <br />
-                <button is="emby-button" type="submit" class="raised button-submit block">
-                    <span>Save</span>
-                </button>
             </form>
         </div>
     </div>
@@ -374,6 +448,31 @@
                 page.querySelector('#FixedCropFields').style.display = mode === '2' ? '' : 'none';
             }
 
+            /*
+             * Shows which plugin version is actually running.
+             *
+             * The point is not the number, it is that a page served from a browser
+             * cache predating this renders nothing here — so a missing badge says
+             * "you are looking at a stale page", which is otherwise invisible and
+             * easy to mistake for a server that did not pick up the new build.
+             * Silent on failure: an older server without the endpoint is not worth
+             * an error on a page that otherwise works.
+             */
+            function showVersion() {
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Colorist/Version'),
+                    dataType: 'text'
+                }).then(function (version) {
+                    if (version) {
+                        // textContent, not innerHTML: this string comes off the wire
+                        // and there is no reason for it ever to be parsed as markup.
+                        page.querySelector('#ColoristVersion').textContent =
+                            'v' + String(version).replace(/"/g, '');
+                    }
+                }, function () { });
+            }
+
             function load() {
                 Dashboard.showLoadingMsg();
 
@@ -397,6 +496,7 @@
                     page.querySelector('#OutputWidth').value = config.OutputWidth;
                     page.querySelector('#OutputHeight').value = config.OutputHeight;
                     page.querySelector('#WriteImageSidecar').checked = config.WriteImageSidecar;
+                    page.querySelector('#DeleteImagesOnly').checked = config.DeleteImagesOnly;
                     page.querySelector('#Smooth').checked = config.Smooth;
                     page.querySelector('#WriteBesideMedia').checked = config.WriteBesideMedia;
                     page.querySelector('#ShowOnDetailPage').checked = config.ShowOnDetailPage;
@@ -444,6 +544,7 @@
                     config.OutputWidth = numberOf('#OutputWidth', 1920);
                     config.OutputHeight = numberOf('#OutputHeight', 240);
                     config.WriteImageSidecar = page.querySelector('#WriteImageSidecar').checked;
+                    config.DeleteImagesOnly = page.querySelector('#DeleteImagesOnly').checked;
                     config.Smooth = page.querySelector('#Smooth').checked;
                     config.WriteBesideMedia = page.querySelector('#WriteBesideMedia').checked;
                     config.ShowOnDetailPage = page.querySelector('#ShowOnDetailPage').checked;
@@ -466,6 +567,7 @@
 
             page.addEventListener('pageshow', function () {
                 load();
+                showVersion();
             });
 
             page.querySelector('.colTabBar').addEventListener('click', function (event) {
@@ -495,6 +597,82 @@
                 }, function () {
                     status.textContent = 'Could not queue the task — see the server log.';
                 });
+            });
+
+            /*
+             * The delete button arms on the first click and fires on the second.
+             *
+             * There is no undoing this and no confirm dialog available here that is
+             * not window.confirm, which the dashboard suppresses in some clients. Two
+             * deliberate clicks on a button that visibly changes to say what it is
+             * about to do is the honest version. Arming lapses after eight seconds so
+             * a click forgotten about does not sit there waiting to be completed by
+             * an accidental one.
+             */
+            var deleteArmed = null;
+
+            function disarmDelete() {
+                var button = page.querySelector('#ColoristDeleteAll');
+
+                if (deleteArmed) {
+                    clearTimeout(deleteArmed);
+                    deleteArmed = null;
+                }
+
+                button.classList.remove('colArmed');
+                button.querySelector('span').textContent = 'Delete saved barcodes';
+            }
+
+            page.querySelector('#ColoristDeleteAll').addEventListener('click', function () {
+                var button = this;
+                var status = page.querySelector('#ColoristDeleteStatus');
+                var imagesOnly = page.querySelector('#DeleteImagesOnly').checked;
+
+                if (!deleteArmed) {
+                    button.classList.add('colArmed');
+                    button.querySelector('span').textContent = imagesOnly
+                        ? 'Click again to delete every PNG'
+                        : 'Click again to delete every barcode';
+
+                    status.textContent = imagesOnly
+                        ? 'The colour data will be kept.'
+                        : 'Everything will go — all barcodes will need sampling again.';
+
+                    deleteArmed = setTimeout(function () {
+                        deleteArmed = null;
+                        disarmDelete();
+                        status.textContent = '';
+                    }, 8000);
+
+                    return;
+                }
+
+                disarmDelete();
+                status.textContent = 'Saving the setting, then queueing…';
+
+                // Saved before queueing, because the scope lives in the configuration
+                // — a scheduled task takes no arguments, so an unsaved checkbox would
+                // silently run the previous setting. Which, for this button, could
+                // mean deleting the colour data when you asked for only the images.
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    config.DeleteImagesOnly = imagesOnly;
+                    return ApiClient.updatePluginConfiguration(pluginId, config);
+                }).then(function () {
+                    return ApiClient.ajax({
+                        type: 'POST',
+                        url: ApiClient.getUrl('Colorist/Delete')
+                    });
+                }).then(function () {
+                    status.textContent = 'Queued. Progress appears under Dashboard → Scheduled Tasks.';
+                }, function () {
+                    status.textContent = 'Could not queue the task — see the server log.';
+                });
+            });
+
+            page.querySelector('#DeleteImagesOnly').addEventListener('change', function () {
+                // Changing the scope while armed would fire the wrong one.
+                disarmDelete();
+                page.querySelector('#ColoristDeleteStatus').textContent = '';
             });
 
             /*

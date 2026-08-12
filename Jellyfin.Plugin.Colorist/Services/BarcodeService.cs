@@ -79,14 +79,31 @@ namespace Jellyfin.Plugin.Colorist.Services
                 kinds.Add(BaseItemKind.Episode);
             }
 
-            if (kinds.Count == 0)
-            {
-                return Array.Empty<BaseItem>();
-            }
+            return kinds.Count == 0
+                ? Array.Empty<BaseItem>()
+                : Query(kinds, parentId);
+        }
 
+        /// <summary>
+        /// Every item Colorist could ever have written a barcode for.
+        /// </summary>
+        /// <returns>Every movie and episode with a file.</returns>
+        /// <remarks>
+        /// Ignores the movie and episode switches, which
+        /// <see cref="GetEligibleItems"/> honours. Those say what a generation run
+        /// should build; they must not say what a delete is allowed to reach.
+        /// Somebody who turns episodes off and then deletes is asking for the episode
+        /// barcodes already on disk to go, and leaving thousands of files behind
+        /// because of a setting that was flipped afterwards would be a trap.
+        /// </remarks>
+        public IReadOnlyList<BaseItem> GetAllItems() =>
+            Query([BaseItemKind.Movie, BaseItemKind.Episode], Guid.Empty);
+
+        private IReadOnlyList<BaseItem> Query(IReadOnlyList<BaseItemKind> kinds, Guid parentId)
+        {
             var query = new InternalItemsQuery
             {
-                IncludeItemTypes = kinds.ToArray(),
+                IncludeItemTypes = [.. kinds],
                 Recursive = true,
 
                 // Virtual items are episodes the library knows about from metadata but

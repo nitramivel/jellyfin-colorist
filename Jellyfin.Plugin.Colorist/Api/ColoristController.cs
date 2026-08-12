@@ -48,6 +48,21 @@ namespace Jellyfin.Plugin.Colorist.Api
             _logger = logger;
         }
 
+        /// <summary>The running plugin version.</summary>
+        /// <returns>The assembly version.</returns>
+        /// <remarks>
+        /// Read by the settings page purely so it can show which build is actually
+        /// loaded. The point is not the number but the blank: a page served from a
+        /// browser cache predating this endpoint renders nothing there, so an empty
+        /// badge means you are looking at a stale page rather than a stale server —
+        /// which is otherwise invisible and easy to spend an evening chasing.
+        /// </remarks>
+        [HttpGet("Version")]
+        [Authorize(Policy = Policies.RequiresElevation)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public ActionResult<string> GetVersion() =>
+            Plugin.Instance?.Version.ToString() ?? "unknown";
+
         /// <summary>Serves an item's colour data.</summary>
         /// <param name="itemId">The item.</param>
         /// <returns>The colours, or 404 when the item has none.</returns>
@@ -159,17 +174,38 @@ namespace Jellyfin.Plugin.Colorist.Api
         [HttpPost("Generate")]
         [Authorize(Policy = Policies.RequiresElevation)]
         [ProducesResponseType(StatusCodes.Status202Accepted)]
-        public ActionResult Generate()
+        public ActionResult Generate() => Queue("ColoristGenerateBarcodes");
+
+        /// <summary>Queues removal of every barcode Colorist has written.</summary>
+        /// <returns>202 once the task is queued.</returns>
+        /// <remarks>
+        /// Scope comes from <c>DeleteImagesOnly</c> in the configuration rather than
+        /// from a parameter here, because the work is done by a scheduled task and a
+        /// task takes no arguments. The settings page saves the configuration before
+        /// posting this, so the checkbox next to the button is what runs.
+        /// <para>
+        /// Queued rather than done inline: this is bounded work, unlike generation,
+        /// but a large library is still tens of thousands of existence checks against
+        /// storage that may be a network mount, and the run deserves a progress bar
+        /// and a cancel button rather than a connection that times out halfway.
+        /// </para>
+        /// </remarks>
+        [HttpPost("Delete")]
+        [Authorize(Policy = Policies.RequiresElevation)]
+        [ProducesResponseType(StatusCodes.Status202Accepted)]
+        public ActionResult DeleteAll() => Queue("ColoristDeleteBarcodes");
+
+        private ActionResult Queue(string key)
         {
             var task = _taskManager.ScheduledTasks
                 .FirstOrDefault(t => string.Equals(
                     t.ScheduledTask.Key,
-                    "ColoristGenerateBarcodes",
+                    key,
                     StringComparison.Ordinal));
 
             if (task is null)
             {
-                _logger.LogError("Colorist: the generation task is not registered");
+                _logger.LogError("Colorist: the {Key} task is not registered", key);
                 return StatusCode(StatusCodes.Status500InternalServerError);
             }
 
