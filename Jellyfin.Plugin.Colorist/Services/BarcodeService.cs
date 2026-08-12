@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Colorist.Configuration;
+using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Core.Color;
 using Jellyfin.Plugin.Colorist.Core.Imaging;
 using Jellyfin.Plugin.Colorist.Core.Sampling;
@@ -77,14 +79,31 @@ namespace Jellyfin.Plugin.Colorist.Services
                 kinds.Add(BaseItemKind.Episode);
             }
 
-            if (kinds.Count == 0)
-            {
-                return Array.Empty<BaseItem>();
-            }
+            return kinds.Count == 0
+                ? Array.Empty<BaseItem>()
+                : Query(kinds, parentId);
+        }
 
+        /// <summary>
+        /// Every item Colorist could ever have written a barcode for.
+        /// </summary>
+        /// <returns>Every movie and episode with a file.</returns>
+        /// <remarks>
+        /// Ignores the movie and episode switches, which
+        /// <see cref="GetEligibleItems"/> honours. Those say what a generation run
+        /// should build; they must not say what a delete is allowed to reach.
+        /// Somebody who turns episodes off and then deletes is asking for the episode
+        /// barcodes already on disk to go, and leaving thousands of files behind
+        /// because of a setting that was flipped afterwards would be a trap.
+        /// </remarks>
+        public IReadOnlyList<BaseItem> GetAllItems() =>
+            Query([BaseItemKind.Movie, BaseItemKind.Episode], Guid.Empty);
+
+        private IReadOnlyList<BaseItem> Query(IReadOnlyList<BaseItemKind> kinds, Guid parentId)
+        {
             var query = new InternalItemsQuery
             {
-                IncludeItemTypes = kinds.ToArray(),
+                IncludeItemTypes = [.. kinds],
                 Recursive = true,
 
                 // Virtual items are episodes the library knows about from metadata but
@@ -217,15 +236,19 @@ namespace Jellyfin.Plugin.Colorist.Services
                 return BarcodeOutcome.Ineligible;
             }
 
-            var width = Math.Clamp(configuration.OutputWidth, 64, 8000);
-            var height = Math.Clamp(configuration.OutputHeight, 16, 2000);
+            // What gets stored is the measurement. Stripe width, blending and height
+            // are decisions the detail page makes when it draws, so changing any of
+            // them costs a page reload rather than another pass over the library.
+            var data = Encoding.UTF8.GetBytes(BarcodeData.Serialize(columns));
 
-            var pixels = BarcodeComposer.Compose(columns, width, height, configuration.Smooth);
-            var png = PngWriter.Encode(pixels, width, height);
+            var png = configuration.WriteImageSidecar
+                ? RenderImage(columns, configuration)
+                : null;
 
             var stored = await _store.SaveAsync(
                 item.Id,
                 mediaPath,
+                data,
                 png,
                 configuration.WriteBesideMedia,
                 cancellationToken).ConfigureAwait(false);
@@ -238,6 +261,26 @@ namespace Jellyfin.Plugin.Colorist.Services
                 stored.Path);
 
             return BarcodeOutcome.Generated;
+        }
+
+        /// <summary>
+        /// Renders the optional PNG beside the colour data.
+        /// </summary>
+        /// <remarks>
+        /// Off by default. The strip on the detail page is drawn from the colour
+        /// data, so nothing in the plugin reads this file — it exists for people who
+        /// want a picture in the movie folder that other tools can open, and its
+        /// dimensions and blending are frozen at whatever they were when it was
+        /// written.
+        /// </remarks>
+        private static byte[] RenderImage(IReadOnlyList<Rgb> columns, PluginConfiguration configuration)
+        {
+            var width = Math.Clamp(configuration.OutputWidth, 64, 8000);
+            var height = Math.Clamp(configuration.OutputHeight, 16, 2000);
+
+            var pixels = BarcodeComposer.Compose(columns, width, height, configuration.Smooth);
+
+            return PngWriter.Encode(pixels, width, height);
         }
 
         private async Task<CropRect?> ResolveCropAsync(

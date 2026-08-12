@@ -1,8 +1,15 @@
 # Colorist — Jellyfin plugin
 
 Samples colour across a video with ffmpeg, reduces each sampled frame to one
-representative colour, and renders the sequence as a vertical-stripe barcode stored
-beside the media and shown at the foot of the detail page.
+representative colour, and stores that sequence of colours beside the media. The
+detail page draws it as a vertical-stripe barcode across the foot of the page.
+
+**The stored artefact is colour data, not an image** (`<stem>-colorist.json`,
+`{"v":1,"colors":"<hex triplets>"}`). Everything downstream of sampling — stripe
+width, blending, display height — is a draw-time decision, so changing any of them
+costs a page reload rather than another ffmpeg pass over the library. A PNG can be
+written alongside it (`WriteImageSidecar`, off by default) for other software to
+open; nothing in the plugin reads it.
 
 **Scope discipline:** Colorist samples colour and draws a strip. It is not a general
 image-processing plugin and does not manage artwork — it deliberately writes to a
@@ -17,7 +24,7 @@ The .NET 9 SDK is installed per-user and is **not on `PATH` by default**:
 export PATH="$HOME/.dotnet:$PATH"     # required first, in every shell
 
 dotnet build Jellyfin.Plugin.Colorist.sln -c Release
-dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 109 tests, no network, no ffmpeg
+dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 185 tests, no network, no ffmpeg
 ./build/package.sh                                       # artifacts/Colorist_<version>/
 VERSION=0.2.0.0 CHANGELOG="..." ./build/release.sh       # zip + manifest.json entry
 ```
@@ -40,14 +47,16 @@ as a plugin repository.
 Core/          pure, no I/O, no Jellyfin types — all of it unit tested
   Color/       Oklab, the three strategies, cluster scoring, the factory
   Sampling/    sample planning, ffmpeg argument construction, crop and pts parsing, binning
-  Imaging/     PNG writer (ZLibStream + CRC32), barcode composer
-  SidecarPaths naming and location rules
+  Imaging/     PNG writer (ZLibStream + CRC32), barcode composer — only for the optional PNG
+  BarcodeData  the stored format: pack, unpack, the JSON envelope
+  SidecarPaths naming and location rules, one extension per artefact
 Services/      everything that touches a process, a file or Jellyfin
   FfmpegRunner        process handling, below-normal priority
   FrameSampler        drives ffmpeg, turns rgb24 into colours
   BarcodeStore        sidecar write with data-directory fallback
   BarcodeService      orchestration, eligibility, crop resolution
   GenerateBarcodesTask  IScheduledTask, the only bulk path
+  DeleteBarcodesTask    IScheduledTask, no default triggers, the only bulk removal
   Web/ScriptInjector  IStartupFilter middleware, patches index.html
 Api/           ColoristController
 Web/           colorist.js, embedded
@@ -60,6 +69,25 @@ pure strings and asserted on. What is left unverified is genuinely only process
 execution and DOM manipulation.
 
 ## Decisions worth not relitigating
+
+**Deleting is scoped by configuration, not by the include switches.**
+`DeleteBarcodesTask` enumerates via `BarcodeService.GetAllItems`, which ignores
+`IncludeMovies`/`IncludeEpisodes` — those say what a *generation* run builds, and
+letting them gate a delete would strand thousands of files because a switch was
+flipped afterwards. Scope (everything vs. images only) rides in `DeleteImagesOnly`
+because a scheduled task takes no arguments; the settings page saves the
+configuration before queueing so the checkbox next to the button is what runs. The
+task has no default triggers on purpose.
+
+**The client draws the strip; the server does not.** `colorist.js` paints a canvas at
+one pixel per stripe for hard edges, or a `linear-gradient(to right in oklab, …)` for
+blended ones. The `in oklab` is the whole reason a gradient is acceptable here —
+browsers interpolate perceptually and reproduce what `BarcodeComposer.Interpolated`
+does server-side, without a second copy of the Oklab maths in JavaScript. Browsers
+predating it (Chrome 111, Safari 16.2, Firefox 128) reject the declaration outright,
+which leaves `style.backgroundImage` empty and is how the sRGB fallback is detected.
+Do not "simplify" this to a plain gradient: sRGB interpolation puts a dark seam at
+every transition, which is the bug Oklab is there to prevent.
 
 **No imaging library.** `Jellyfin.Controller` does not carry SkiaSharp — it lives in
 the server's `Jellyfin.Drawing.Skia`, which is not published for plugins. Adding it
@@ -105,6 +133,22 @@ ffmpeg on the development machine. Specifically unverified:
   extension point and no stable DOM contract. Anchor selectors have fallbacks and the
   script no-ops when they all miss, but expect this file to need adjustment. It must
   never touch a node it did not create.
+
+  Its *rendering* has now been exercised against a browser, using a throwaway page
+  that mimics the 10.11 layout (`.page` with `padding-bottom: 5em`,
+  `.detailPageContent` with a `vw` indent) and a stubbed `ApiClient`. That confirmed,
+  from identical colour data: hard mode paints a canvas reproducing every input
+  colour exactly and in order; blended mode emits
+  `linear-gradient(to right in oklab, …)`; both span the viewport and end flush with
+  the document; and an unparseable gradient does leave `style.backgroundImage` empty,
+  which is what the sRGB fallback detects. What remains unverified is the selectors
+  matching a *real* Jellyfin page.
+- **The bottom bleed.** `bottomBleed` sums `padding-bottom` from the anchor up to the
+  nearest `.page` and cancels the total with a negative margin, so the strip ends
+  where the document does instead of floating above `.page`'s `5em` + safe-area
+  inset. The walk stops at `.page` deliberately — going further would pull the strip
+  through the application shell and over the navigation bar. If the strip sits too
+  low or too high on a real client, this is the function to look at.
 - **Whether `-skip_frame nokey` plus `showinfo` reports timestamps rebased by the
   input seek** as assumed. If sampling comes out time-shifted, this is the first
   place to look.

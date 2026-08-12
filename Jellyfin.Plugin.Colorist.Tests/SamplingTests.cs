@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Core.Color;
@@ -408,18 +409,31 @@ namespace Jellyfin.Plugin.Colorist.Tests
         [Fact]
         public void SitsBesideTheVideoFile()
         {
-            var path = SidecarPaths.ForMedia(Path.Combine("/media", "Arrival (2016)", "Arrival (2016).mkv"));
+            var path = SidecarPaths.ForMedia(
+                Path.Combine("/media", "Arrival (2016)", "Arrival (2016).mkv"),
+                SidecarPaths.DataExtension);
 
             Assert.Equal(
-                Path.Combine("/media", "Arrival (2016)", "Arrival (2016)-colorist.png"),
+                Path.Combine("/media", "Arrival (2016)", "Arrival (2016)-colorist.json"),
                 path);
+        }
+
+        [Fact]
+        public void TheImageSitsBesideTheDataUnderTheSameStem()
+        {
+            var media = Path.Combine("/media", "Arrival (2016)", "Arrival (2016).mkv");
+
+            var data = SidecarPaths.ForMedia(media, SidecarPaths.DataExtension);
+            var image = SidecarPaths.ForMedia(media, SidecarPaths.ImageExtension);
+
+            Assert.Equal(Path.ChangeExtension(data, ".png"), image);
         }
 
         [Fact]
         public void EpisodesLandInTheSeasonFolderAndDoNotCollide()
         {
-            var first = SidecarPaths.ForMedia("/tv/Show/Season 01/Show - S01E01.mkv");
-            var second = SidecarPaths.ForMedia("/tv/Show/Season 01/Show - S01E02.mkv");
+            var first = SidecarPaths.ForMedia("/tv/Show/Season 01/Show - S01E01.mkv", SidecarPaths.DataExtension);
+            var second = SidecarPaths.ForMedia("/tv/Show/Season 01/Show - S01E02.mkv", SidecarPaths.DataExtension);
 
             Assert.Equal(Path.GetDirectoryName(first), Path.GetDirectoryName(second));
             Assert.NotEqual(first, second);
@@ -431,22 +445,24 @@ namespace Jellyfin.Plugin.Colorist.Tests
         [InlineData("   ")]
         public void RefusesAMissingPath(string? path)
         {
-            Assert.Null(SidecarPaths.ForMedia(path));
+            Assert.Null(SidecarPaths.ForMedia(path, SidecarPaths.DataExtension));
         }
 
         [Fact]
         public void FallbackIsShardedAndKeyedOnTheItemId()
         {
             var id = Guid.Parse("1dd662e3-27c3-4e43-bbfe-108509a0b84f");
-            var path = SidecarPaths.ForFallback("/data/colorist", id);
+            var path = SidecarPaths.ForFallback("/data/colorist", id, SidecarPaths.DataExtension);
 
             Assert.Contains("1dd662e327c34e43bbfe108509a0b84f", path, StringComparison.Ordinal);
             Assert.Contains(Path.Combine("barcodes", "1d"), path, StringComparison.Ordinal);
+            Assert.EndsWith(".json", path, StringComparison.Ordinal);
         }
 
         [Fact]
         public void RecognisesItsOwnFiles()
         {
+            Assert.True(SidecarPaths.IsBarcodeFile("/m/Arrival-colorist.json"));
             Assert.True(SidecarPaths.IsBarcodeFile("/m/Arrival-colorist.png"));
             Assert.False(SidecarPaths.IsBarcodeFile("/m/Arrival-thumb.jpg"));
             Assert.False(SidecarPaths.IsBarcodeFile("/m/Arrival.mkv"));
@@ -543,6 +559,99 @@ namespace Jellyfin.Plugin.Colorist.Tests
             var script = ScriptInjector.ReadScript();
 
             Assert.Matches(@"var DISPLAY_HEIGHT = \d+;", script);
+        }
+
+        [Fact]
+        public void TheBlendingSettingCanReachTheScript()
+        {
+            // Same regex substitution as the height, same silent failure if the
+            // declaration is reworded — and blending is now a client-side decision,
+            // so this is the only route it has.
+            var script = ScriptInjector.ReadScript();
+
+            Assert.Matches(@"var SMOOTH = (?:true|false);", script);
+        }
+
+        [Theory]
+        [InlineData(true, "var SMOOTH = true;")]
+        [InlineData(false, "var SMOOTH = false;")]
+        public void BlendingCanBeToggledWithoutRegeneratingAnything(bool smooth, string expected)
+        {
+            // The whole point of storing colours rather than an image: this setting
+            // is applied when the page draws, so flipping it costs a page load and
+            // not another ffmpeg pass over the library. If the substitution stops
+            // matching, the checkbox silently does nothing.
+            var served = ScriptInjector.Apply(ScriptInjector.ReadScript(), 90, smooth);
+
+            Assert.Contains(expected, served, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void TheTwoBlendingSettingsProduceDifferentScripts()
+        {
+            // Which is what makes the cache fingerprint change with the setting —
+            // the served URL is a hash of this text, so a browser holding the old
+            // script refetches instead of running it forever.
+            var script = ScriptInjector.ReadScript();
+
+            Assert.NotEqual(
+                ScriptInjector.Apply(script, 90, true),
+                ScriptInjector.Apply(script, 90, false));
+        }
+
+        [Theory]
+        [InlineData(0, 20)]
+        [InlineData(10000, 400)]
+        [InlineData(90, 90)]
+        public void TheDisplayHeightIsClampedOnTheWayOut(int configured, int expected)
+        {
+            var served = ScriptInjector.Apply(ScriptInjector.ReadScript(), configured, false);
+
+            Assert.Contains(
+                "var DISPLAY_HEIGHT = " + expected.ToString(CultureInfo.InvariantCulture) + ";",
+                served,
+                StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void TheScriptFetchesColoursRatherThanAnImage()
+        {
+            // An <img> cannot carry an Authorization header, which is why the old
+            // version had to put an access token in the query string. Drawing from
+            // the colours endpoint through ApiClient is what removed that.
+            var script = ScriptInjector.ReadScript();
+
+            Assert.Contains("/Colors", script, StringComparison.Ordinal);
+            Assert.DoesNotContain("api_key", script, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void BlendedStripsAreInterpolatedPerceptually()
+        {
+            // sRGB interpolation sends the midpoint between two vivid colours of
+            // different hue through a darker, greyer place than either endpoint, so
+            // a blended strip picks up a dark seam at every transition. The `in
+            // oklab` is what stops that, and the plain gradient after it is only
+            // ever the fallback for browsers that reject the syntax outright.
+            var script = ScriptInjector.ReadScript();
+
+            var perceptual = script.IndexOf("to right in oklab", StringComparison.Ordinal);
+            var fallback = script.IndexOf("'linear-gradient(to right,'", StringComparison.Ordinal);
+
+            Assert.True(perceptual > 0, "the perceptual gradient is missing");
+            Assert.True(perceptual < fallback, "the sRGB gradient must only be the fallback");
+        }
+
+        [Fact]
+        public void TheStripIsPulledClearOfThePagesBottomPadding()
+        {
+            // .page carries padding-bottom: 5em plus the safe-area inset, which left
+            // the strip floating above the end of the document. The walk stops at
+            // .page deliberately — further up is the application shell.
+            var script = ScriptInjector.ReadScript();
+
+            Assert.Contains("marginBottom", script, StringComparison.Ordinal);
+            Assert.Contains("contains('page')", script, StringComparison.Ordinal);
         }
 
         [Fact]

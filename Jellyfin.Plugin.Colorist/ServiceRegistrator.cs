@@ -19,6 +19,7 @@ namespace Jellyfin.Plugin.Colorist
             serviceCollection.AddSingleton<BarcodeService>();
 
             serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, GenerateBarcodesTask>();
+            serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, DeleteBarcodesTask>();
 
             // Registered as IStartupFilter, which is how a plugin gets middleware into
             // the server's pipeline. See ScriptInjector for why this is preferred over

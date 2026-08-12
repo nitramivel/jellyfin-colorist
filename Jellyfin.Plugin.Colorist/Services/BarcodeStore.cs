@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Colorist.Services
 {
     /// <summary>Where a barcode ended up.</summary>
-    /// <param name="Path">Full path to the written file.</param>
+    /// <param name="Path">Full path to the written colour data.</param>
     /// <param name="BesideMedia">Whether it landed next to the media rather than in plugin data.</param>
     public readonly record struct StoredBarcode(string Path, bool BesideMedia);
 
@@ -18,11 +18,18 @@ namespace Jellyfin.Plugin.Colorist.Services
     /// </summary>
     /// <remarks>
     /// <b>Two locations, one lookup.</b> The preferred home is beside the media, so
-    /// the image travels with the file and is visible to anything else that looks in
-    /// that folder. The fallback is the plugin's data directory, for the very common
-    /// case of a library mounted read-only. Everything that reads a barcode asks this
-    /// class, which checks both — so nothing downstream, least of all the web client,
-    /// has to know or care which one an item used.
+    /// the barcode travels with the file and is visible to anything else that looks
+    /// in that folder. The fallback is the plugin's data directory, for the very
+    /// common case of a library mounted read-only. Everything that reads a barcode
+    /// asks this class, which checks both — so nothing downstream, least of all the
+    /// web client, has to know or care which one an item used.
+    /// <para>
+    /// <b>Two files, one decision.</b> The colour data is the barcode; the PNG is an
+    /// optional rendering of it. They are written and removed together and neither
+    /// is allowed to land in a different location from the other, because an item
+    /// whose data says one thing and whose picture says another is worse than an
+    /// item with no picture.
+    /// </para>
     /// </remarks>
     public sealed class BarcodeStore
     {
@@ -41,53 +48,73 @@ namespace Jellyfin.Plugin.Colorist.Services
         /// <summary>Gets the plugin's own data directory.</summary>
         public string DataRoot => Path.Combine(_paths.DataPath, "colorist");
 
-        /// <summary>Finds an item's barcode wherever it lives.</summary>
+        /// <summary>Finds an item's colour data wherever it lives.</summary>
         /// <param name="itemId">The Jellyfin item ID.</param>
         /// <param name="mediaPath">The item's media path, if it has one.</param>
         /// <returns>The path to the existing file, or null when there is none.</returns>
-        public string? Locate(Guid itemId, string? mediaPath)
-        {
-            var sidecar = SidecarPaths.ForMedia(mediaPath);
+        public string? Locate(Guid itemId, string? mediaPath) =>
+            LocateWithExtension(itemId, mediaPath, SidecarPaths.DataExtension);
 
-            if (sidecar is not null && File.Exists(sidecar))
-            {
-                return sidecar;
-            }
-
-            var fallback = SidecarPaths.ForFallback(DataRoot, itemId);
-
-            return File.Exists(fallback) ? fallback : null;
-        }
+        /// <summary>Finds an item's rendered image, if one was written.</summary>
+        /// <param name="itemId">The Jellyfin item ID.</param>
+        /// <param name="mediaPath">The item's media path, if it has one.</param>
+        /// <returns>The path to the existing file, or null when there is none.</returns>
+        public string? LocateImage(Guid itemId, string? mediaPath) =>
+            LocateWithExtension(itemId, mediaPath, SidecarPaths.ImageExtension);
 
         /// <summary>Whether a barcode already exists for an item.</summary>
         /// <param name="itemId">The Jellyfin item ID.</param>
         /// <param name="mediaPath">The item's media path.</param>
-        /// <returns>Whether either location holds a file.</returns>
+        /// <returns>Whether either location holds colour data.</returns>
+        /// <remarks>
+        /// Keyed on the colour data alone. A leftover PNG from a version that stored
+        /// only the picture does not count as done, because the colours behind it
+        /// cannot be recovered from a stretched and possibly blended image — such an
+        /// item genuinely does need sampling again.
+        /// </remarks>
         public bool Exists(Guid itemId, string? mediaPath) => Locate(itemId, mediaPath) is not null;
 
         /// <summary>Writes a barcode, preferring the media folder.</summary>
         /// <param name="itemId">The Jellyfin item ID.</param>
         /// <param name="mediaPath">The item's media path.</param>
-        /// <param name="png">The encoded image.</param>
+        /// <param name="data">The encoded colour data.</param>
+        /// <param name="png">The rendered image, or null when images are switched off.</param>
         /// <param name="besideMedia">Whether to attempt the media folder at all.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Where it was written.</returns>
+        /// <returns>Where the colour data was written.</returns>
         public async Task<StoredBarcode> SaveAsync(
             Guid itemId,
             string? mediaPath,
-            byte[] png,
+            byte[] data,
+            byte[]? png,
             bool besideMedia,
             CancellationToken cancellationToken)
         {
             if (besideMedia)
             {
-                var sidecar = SidecarPaths.ForMedia(mediaPath);
+                var sidecar = SidecarPaths.ForMedia(mediaPath, SidecarPaths.DataExtension);
+                var sidecarImage = SidecarPaths.ForMedia(mediaPath, SidecarPaths.ImageExtension);
 
-                if (sidecar is not null)
+                if (sidecar is not null && sidecarImage is not null)
                 {
                     try
                     {
-                        await WriteAsync(sidecar, png, cancellationToken).ConfigureAwait(false);
+                        // The data write is the one allowed to send this to the
+                        // fallback. Once it lands, this item lives beside the media
+                        // whatever happens to the picture — a failed PNG is a missing
+                        // PNG, which the detail page draws around perfectly well,
+                        // whereas retrying the pair elsewhere would leave two data
+                        // files disagreeing about which is current.
+                        await WriteAsync(sidecar, data, cancellationToken).ConfigureAwait(false);
+                        await WritePairedImageAsync(sidecarImage, png, cancellationToken).ConfigureAwait(false);
+
+                        // Anything an earlier run left in the other location would
+                        // otherwise outlive it: a library folder that was read-only
+                        // when the barcode was first made and is writable now would
+                        // keep serving whichever file Locate happened to find first.
+                        DiscardAt(SidecarPaths.ForFallback(DataRoot, itemId, SidecarPaths.DataExtension));
+                        DiscardAt(SidecarPaths.ForFallback(DataRoot, itemId, SidecarPaths.ImageExtension));
+
                         return new StoredBarcode(sidecar, true);
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -104,8 +131,11 @@ namespace Jellyfin.Plugin.Colorist.Services
                 }
             }
 
-            var fallback = SidecarPaths.ForFallback(DataRoot, itemId);
-            await WriteAsync(fallback, png, cancellationToken).ConfigureAwait(false);
+            var fallback = SidecarPaths.ForFallback(DataRoot, itemId, SidecarPaths.DataExtension);
+            var fallbackImage = SidecarPaths.ForFallback(DataRoot, itemId, SidecarPaths.ImageExtension);
+
+            await WriteAsync(fallback, data, cancellationToken).ConfigureAwait(false);
+            await WritePairedImageAsync(fallbackImage, png, cancellationToken).ConfigureAwait(false);
 
             return new StoredBarcode(fallback, false);
         }
@@ -113,26 +143,165 @@ namespace Jellyfin.Plugin.Colorist.Services
         /// <summary>Removes an item's barcode from both locations.</summary>
         /// <param name="itemId">The Jellyfin item ID.</param>
         /// <param name="mediaPath">The item's media path.</param>
-        public void Delete(Guid itemId, string? mediaPath)
+        /// <param name="imagesOnly">Remove only the rendered PNG, keeping the colours.</param>
+        /// <returns>How many files were actually removed.</returns>
+        public int Delete(Guid itemId, string? mediaPath, bool imagesOnly = false)
         {
-            foreach (var candidate in new[] { SidecarPaths.ForMedia(mediaPath), SidecarPaths.ForFallback(DataRoot, itemId) })
+            var removed = 0;
+
+            foreach (var extension in Extensions(imagesOnly))
             {
-                if (candidate is null)
-                {
-                    continue;
-                }
+                removed += DiscardAt(SidecarPaths.ForMedia(mediaPath, extension), loud: true) ? 1 : 0;
+                removed += DiscardAt(SidecarPaths.ForFallback(DataRoot, itemId, extension), loud: true) ? 1 : 0;
+            }
+
+            return removed;
+        }
+
+        /// <summary>
+        /// Removes everything left in the plugin's own data directory.
+        /// </summary>
+        /// <param name="imagesOnly">Remove only rendered PNGs, keeping the colours.</param>
+        /// <returns>How many files were removed.</returns>
+        /// <remarks>
+        /// The orphan sweep. Deleting item by item only reaches items the library
+        /// still knows about, so a film removed from Jellyfin leaves its fallback
+        /// barcode behind forever — nothing will ever ask for that ID again. Every
+        /// file under <c>barcodes/</c> was written by this plugin and is named after
+        /// an item ID, so the directory can be cleared wholesale.
+        /// <para>
+        /// There is no equivalent for sidecars beside media. Finding those would mean
+        /// walking every library folder on disk looking for a filename pattern, which
+        /// is a great deal of I/O for the sake of items that no longer exist — and it
+        /// would mean this plugin deleting files it cannot tie back to anything
+        /// Jellyfin currently holds. Orphaned sidecars are left alone.
+        /// </para>
+        /// </remarks>
+        public int SweepDataDirectory(bool imagesOnly)
+        {
+            var root = Path.Combine(DataRoot, "barcodes");
+
+            if (!Directory.Exists(root))
+            {
+                return 0;
+            }
+
+            var removed = 0;
+
+            foreach (var extension in Extensions(imagesOnly))
+            {
+                string[] files;
 
                 try
                 {
-                    if (File.Exists(candidate))
-                    {
-                        File.Delete(candidate);
-                    }
+                    files = Directory.GetFiles(root, "*" + extension, SearchOption.AllDirectories);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    _logger.LogWarning(ex, "Colorist: could not delete {Path}", candidate);
+                    _logger.LogWarning(ex, "Colorist: could not enumerate {Path}", root);
+                    continue;
                 }
+
+                foreach (var file in files)
+                {
+                    removed += DiscardAt(file, loud: true) ? 1 : 0;
+                }
+            }
+
+            return removed;
+        }
+
+        private static string[] Extensions(bool imagesOnly) =>
+            imagesOnly
+                ? [SidecarPaths.ImageExtension]
+                : [SidecarPaths.DataExtension, SidecarPaths.ImageExtension];
+
+        private string? LocateWithExtension(Guid itemId, string? mediaPath, string extension)
+        {
+            var sidecar = SidecarPaths.ForMedia(mediaPath, extension);
+
+            if (sidecar is not null && File.Exists(sidecar))
+            {
+                return sidecar;
+            }
+
+            var fallback = SidecarPaths.ForFallback(DataRoot, itemId, extension);
+
+            return File.Exists(fallback) ? fallback : null;
+        }
+
+        /// <summary>
+        /// Writes the rendered image, or removes a stale one when images are off.
+        /// </summary>
+        /// <remarks>
+        /// The removal is the part that matters. Turning images off is a request to
+        /// stop putting PNGs in library folders, and leaving the ones already there
+        /// would mean the setting only applies to films nobody has regenerated yet —
+        /// with the leftovers frozen at whatever the settings were when they were
+        /// made, which is precisely the staleness storing colour data exists to end.
+        /// <para>
+        /// Never throws past the caller, which is what keeps the picture from
+        /// deciding where the data lives.
+        /// </para>
+        /// </remarks>
+        private async Task WritePairedImageAsync(
+            string path,
+            byte[]? png,
+            CancellationToken cancellationToken)
+        {
+            if (png is null)
+            {
+                DiscardAt(path);
+                return;
+            }
+
+            try
+            {
+                await WriteAsync(path, png, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogDebug(ex, "Colorist: could not write the image at {Path}", path);
+            }
+        }
+
+        /// <summary>Removes one file if it is there.</summary>
+        /// <returns>Whether a file was actually deleted.</returns>
+        /// <remarks>
+        /// A read-only library folder makes this fail per file, and that is a
+        /// configuration rather than a fault — so the caller counts what it managed
+        /// rather than assuming, and a bulk delete reports the difference instead of
+        /// claiming a clean sweep it did not achieve.
+        /// </remarks>
+        private bool DiscardAt(string? path, bool loud = false)
+        {
+            if (path is null)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    return false;
+                }
+
+                File.Delete(path);
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (loud)
+                {
+                    _logger.LogWarning(ex, "Colorist: could not delete {Path}", path);
+                }
+                else
+                {
+                    _logger.LogDebug(ex, "Colorist: could not clean up {Path}", path);
+                }
+
+                return false;
             }
         }
 
