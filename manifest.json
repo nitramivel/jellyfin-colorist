@@ -9,6 +9,14 @@
     "imageUrl": "",
     "versions": [
       {
+        "version": "0.3.4.0",
+        "changelog": "Fixes the action buttons on the settings page rendering as bare browser buttons rather than Jellyfin ones \u2014 the styling turns on a class the dashboard adds at runtime through a custom-elements API that browsers have removed, so the page now carries that class itself. The delete button drops its hard-coded red, which a custom dashboard theme was flattening anyway; the warning now lives on the card and in the armed state, which says what the next click will do. The tab bar gains a baseline, so the selected tab's underline reads as a selected tab.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/nitramivel/jellyfin-colorist/releases/download/v0.3.4.0/colorist_0.3.4.0.zip",
+        "checksum": "fb1492667194bc6b4a6dcd282f2900ca",
+        "timestamp": "2026-08-12T20:24:35Z"
+      },
+      {
         "version": "0.3.3.0",
         "changelog": "Fixes the settings page buttons, which 0.3.2.0 left unstyled. Jellyfin's button theming keys on an attribute that release removed, so every button on the page rendered bare; the attribute is back on all of them, generated ones included. The tab strip along the top is now a row of tabs rather than a row of raised buttons, underlined to show which panel you are looking at, matching the Curator plugin's settings page.",
         "targetAbi": "10.11.0.0",
