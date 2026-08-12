@@ -9,6 +9,14 @@
     "imageUrl": "",
     "versions": [
       {
+        "version": "0.2.0.0",
+        "changelog": "Barcodes are now stored as the colours that were sampled rather than as a picture of them: <video filename>-colorist.json, one packed hex triplet per stripe, about 6 KB for the default thousand columns. The detail page draws the strip from that in the browser, so stripe blending and display height are applied when the page renders and cost a reload instead of another ffmpeg pass over the whole library. The request also carries a real Authorization header, which an <img> cannot, so no access token travels in a URL, and the 404 for an ungenerated item doubles as the existence check \u2014 one round trip per page instead of two. Blended strips are interpolated perceptually in Oklab by the browser rather than through the dark seam sRGB puts at every transition. A PNG can still be written alongside the data, but it is off by default and nothing in Jellyfin reads it. Also new: a Delete Barcodes task and a button on the settings page that removes what Colorist has written from library folders and from the plugin's data directory, defaulting to clearing only the PNGs and keeping the colours. Fixed the strip floating above the end of the detail page instead of sitting flush with it. The settings page gains a title, the running version and a description, with Save moved to the top of the form. Upgrading from 0.1: those barcodes are PNGs with no colour data behind them and cannot be converted, so affected items will be sampled again on the next run.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/nitramivel/jellyfin-colorist/releases/download/v0.2.0.0/colorist_0.2.0.0.zip",
+        "checksum": "87a1dc49bbc8f52461ad2730b50f4723",
+        "timestamp": "2026-08-12T13:59:26Z"
+      },
+      {
         "version": "0.1.2.0",
         "changelog": "The barcode now spans the full width of the detail page, edge to edge, at the height set in the plugin's settings. It is anchored to the page root rather than to the content container, which carries a 32.45vw left padding on wide layouts to clear the poster and would have indented the strip a third of the way across the screen; any padding on whichever anchor is used is measured and cancelled at render time, and re-measured on resize, because that padding is written in vw and percent and changes with the window. Selectors were taken from the stylesheet a real 10.11.11 server ships rather than guessed. The section heading is gone so the strip reads as a full-bleed band.",
         "targetAbi": "10.11.0.0",
