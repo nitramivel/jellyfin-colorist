@@ -9,6 +9,14 @@
     "imageUrl": "",
     "versions": [
       {
+        "version": "0.3.3.0",
+        "changelog": "Fixes the settings page buttons, which 0.3.2.0 left unstyled. Jellyfin's button theming keys on an attribute that release removed, so every button on the page rendered bare; the attribute is back on all of them, generated ones included. The tab strip along the top is now a row of tabs rather than a row of raised buttons, underlined to show which panel you are looking at, matching the Curator plugin's settings page.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/nitramivel/jellyfin-colorist/releases/download/v0.3.3.0/colorist_0.3.3.0.zip",
+        "checksum": "871603d58dd5e958ef09643b30f335c5",
+        "timestamp": "2026-08-12T19:51:55Z"
+      },
+      {
         "version": "0.3.2.0",
         "changelog": "Three fixes to the Run tab. The action buttons now match the Details and Hide buttons beside them: customized built-in elements do not upgrade when they are created from script, so the buttons in the run list had always been plain ones while the static buttons were not, leaving two kinds of button on one card. Run history recorded by earlier versions is now reordered too. Ordering by when a run started only applied to runs recorded after that change shipped, because older files are named by run ID alone and fall back to the time the file was last written, which is effectively when the run finished; those files are now read and renamed the first time the list is shown after an upgrade, so existing history sorts correctly as well. And a run cancelled by the user is now recorded as cancelled rather than failed. Generation spends its whole life inside the loop that hands items to workers, since that loop waits there whenever every worker is busy, so that is where cancellation actually arrives, and only the wait at the end was guarded; the cancellation escaped and the run was recorded with the failure message kept for a task that ends without reporting anything.",
         "targetAbi": "10.11.0.0",
