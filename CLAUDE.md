@@ -24,7 +24,7 @@ The .NET 9 SDK is installed per-user and is **not on `PATH` by default**:
 export PATH="$HOME/.dotnet:$PATH"     # required first, in every shell
 
 dotnet build Jellyfin.Plugin.Colorist.sln -c Release
-dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 243 tests, no network, no ffmpeg
+dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 245 tests, no network, no ffmpeg
 ./build/package.sh                                       # artifacts/Colorist_<version>/
 VERSION=0.2.0.0 CHANGELOG="..." ./build/release.sh       # zip + manifest.json entry
 ```
@@ -89,13 +89,28 @@ are debounced to five seconds precisely because nothing is reading the file duri
 run. `CurrentItem` is never persisted — it changes several times a second and is only
 ever read from the snapshot.
 
+**Every button on the settings page is a plain `<button class="raised">`.** Customized
+built-in elements do not upgrade when they arrive through `innerHTML`, so the
+generated Details/Hide buttons were always plain ones while the static action buttons
+carried `is="emby-button"` — two kinds of button on one card, styled differently for a
+reason nobody chose. The tab bar and the Save submit keep the attribute; they are
+static and are meant to look like dashboard chrome.
+
+**Cancellation is caught around the dispatch loop, not just the await.**
+`GenerateBarcodesTask` spends its whole life inside `foreach`, because
+`gate.WaitAsync` blocks there until a worker frees up — so that is where cancellation
+lands. With only `Task.WhenAll` guarded, a cancelled run escaped `run.Cancel()` and
+`IRunLog.Dispose` recorded it as **failed**, which is what a user pressing Cancel was
+shown.
+
 **Run files are named `<start time>-<run id>.json`.** Ordering used to come from the
 file's modification time, which is when a run last *wrote* — effectively when it
 finished. Those disagree whenever runs differ in length: a three-hour run started at
 nine listed above a two-minute one started at ten. The start time in the name makes
 the order a property of the run rather than of the filesystem, and costs no reads to
-sort by. Files named by ID alone (0.3.0.0 and earlier) are still found, by matching
-the trailing ID, and fall back to modification time for ordering until they rotate.
+sort by. Files named by ID alone (0.3.0.0 and earlier) are renamed on the first listing after
+an upgrade, so existing history reorders too rather than the fix applying only to new
+runs; anything that will not move keeps its old name and its old ordering.
 
 **A run's own process cannot record that it died.** A file left saying `running` that
 is not the live run belongs to a server that was restarted mid-run, so `Abandoned` is

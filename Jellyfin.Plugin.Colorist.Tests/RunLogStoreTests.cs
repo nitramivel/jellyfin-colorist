@@ -300,6 +300,71 @@ namespace Jellyfin.Plugin.Colorist.Tests
         }
 
         [Fact]
+        public void OlderRunFilesAreReorderedRetroactively()
+        {
+            // Two runs recorded by 0.3.0.0, named by ID alone. The one that started
+            // FIRST finished LAST, so its modification time is the newest — which is
+            // exactly the ordering that was wrong, and fixing only new runs would
+            // have left this history stuck the wrong way round.
+            var older = NewDocument(DateTime.UtcNow.AddHours(-4));
+            var newer = NewDocument(DateTime.UtcNow.AddHours(-1));
+
+            Directory.CreateDirectory(_store.BasePath);
+            WriteLegacy(newer);
+            System.Threading.Thread.Sleep(20);
+            WriteLegacy(older);   // written last, so it has the newest mtime
+
+            var listed = _store.List(5);
+
+            Assert.Equal(newer.RunId, listed[0].RunId);
+            Assert.Equal(older.RunId, listed[1].RunId);
+
+            // And the files have been renamed, so it costs nothing next time.
+            var names = Directory.GetFiles(_store.BasePath, "*.json")
+                .Select(Path.GetFileNameWithoutExtension)
+                .ToList();
+
+            Assert.All(names, n => Assert.Contains('-', n!));
+        }
+
+        private static RunLogDocument NewDocument(DateTime startedAt) => new()
+        {
+            RunId = Guid.NewGuid(),
+            Kind = RunKind.Generate,
+            Status = RunStatus.Completed,
+            StartedAt = startedAt,
+            FinishedAt = startedAt.AddMinutes(5),
+            Total = 1,
+            Completed = 1,
+        };
+
+        private void WriteLegacy(RunLogDocument document)
+        {
+            File.WriteAllText(
+                Path.Combine(_store.BasePath, document.RunId.ToString("N") + ".json"),
+                System.Text.Json.JsonSerializer.Serialize(document));
+        }
+
+        [Fact]
+        public void ACancelledRunSaysCancelledRatherThanFailed()
+        {
+            Guid id;
+
+            using (var run = _store.Begin(RunKind.Generate, RunTrigger.Manual))
+            {
+                id = run.RunId;
+                run.Plan(10);
+                run.Finish(Item("A"));
+                run.Cancel();
+            }
+
+            // Disposing after Cancel must not overwrite it with the failure the
+            // safety net records for a run that ended without saying anything.
+            Assert.Equal(RunStatus.Cancelled, _store.Detail(id)!.Status);
+            Assert.Null(_store.Detail(id)!.Error);
+        }
+
+        [Fact]
         public void TheListIsNewestFirstAndHonoursItsLimit()
         {
             for (var i = 0; i < 8; i++)

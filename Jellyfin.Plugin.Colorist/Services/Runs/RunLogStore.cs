@@ -110,6 +110,7 @@ namespace Jellyfin.Plugin.Colorist.Services.Runs
         private readonly object _gate = new();
 
         private RunWriter? _current;
+        private bool _migrated;
 
         /// <summary>Initialises a new instance of the <see cref="RunLogStore"/> class.</summary>
         /// <param name="paths">Server paths, for the data directory.</param>
@@ -310,8 +311,76 @@ namespace Jellyfin.Plugin.Colorist.Services.Runs
             return file.LastWriteTimeUtc;
         }
 
+        /// <summary>
+        /// Renames run files written before the name carried a start time.
+        /// </summary>
+        /// <remarks>
+        /// Ordering falls back to the file's modification time for those, which is
+        /// when the run last <i>wrote</i> — so a long run started early still sorts
+        /// above a short one started late, and the fix would only have applied to
+        /// runs made from now on. Reading each one and renaming it puts the existing
+        /// history in the right order too.
+        /// <para>
+        /// Once per store instance, and only over files that need it, so the cost is
+        /// a handful of reads on the first listing after an upgrade and nothing
+        /// thereafter. Failures are ignored: a file that will not move keeps its old
+        /// name and its old ordering, which is exactly what it had before.
+        /// </para>
+        /// </remarks>
+        private void MigrateLegacyNames()
+        {
+            lock (_gate)
+            {
+                if (_migrated)
+                {
+                    return;
+                }
+
+                _migrated = true;
+            }
+
+            try
+            {
+                if (!Directory.Exists(BasePath))
+                {
+                    return;
+                }
+
+                foreach (var file in Directory.GetFiles(BasePath, "*.json"))
+                {
+                    var name = Path.GetFileNameWithoutExtension(file);
+
+                    // Already carries a timestamp prefix.
+                    if (name.Length > StampFormat.Length && name[StampFormat.Length] == '-')
+                    {
+                        continue;
+                    }
+
+                    var document = Read(file);
+
+                    if (document is null || document.StartedAt == default)
+                    {
+                        continue;
+                    }
+
+                    var target = PathFor(document.StartedAt, document.RunId);
+
+                    if (!string.Equals(target, file, StringComparison.Ordinal) && !File.Exists(target))
+                    {
+                        File.Move(file, target);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogDebug(ex, "Colorist: could not rename older run logs");
+            }
+        }
+
         private IEnumerable<string> EnumerateRunFiles()
         {
+            MigrateLegacyNames();
+
             if (!Directory.Exists(BasePath))
             {
                 return Array.Empty<string>();

@@ -161,6 +161,14 @@
                    narrow viewport still shrinks instead of scrolling sideways. */
                 #ColoristConfigPage .content-primary { max-width: 1280px; }
 
+                /* The action buttons are plain <button class="raised">, not
+                   is="emby-button". Customized built-in elements do not upgrade when
+                   they arrive through innerHTML, so the Details and Hide buttons in
+                   the run list have always been plain ones — and they are the pair
+                   that looked right. Declaring the attribute on the static buttons
+                   and not on the generated ones meant two kinds of button on one
+                   card, styled differently for a reason nobody chose. */
+
                 /* The one irreversible control on the page, marked as such. */
                 .colDanger {
                     border-color: rgba(229,57,53,0.45);
@@ -496,7 +504,7 @@
                             Queues the scheduled task. A full library is potentially hours of ffmpeg, so it runs
                             in the background &mdash; progress appears below as it goes.
                         </div>
-                        <button is="emby-button" type="button" id="ColoristRunAll" class="raised">
+                        <button type="button" id="ColoristRunAll" class="raised">
                             <span>Generate for the whole library</span>
                         </button>
                         <div id="ColoristRunStatus" class="colStatusLine"></div>
@@ -536,7 +544,7 @@
                             <input is="emby-input" type="text" id="ColoristPreviewId" class="emby-input"
                                    placeholder="e.g. 6f3a1c2e4b5d6789abcdef0123456789" />
                         </div>
-                        <button is="emby-button" type="button" id="ColoristPreviewRun" class="raised">
+                        <button type="button" id="ColoristPreviewRun" class="raised">
                             <span>Build it</span>
                         </button>
                         <div id="ColoristPreviewStatus" class="colStatusLine"></div>
@@ -565,7 +573,7 @@
                             barcode will need sampling again.
                         </div>
 
-                        <button is="emby-button" type="button" id="ColoristDeleteAll" class="raised colDangerButton">
+                        <button type="button" id="ColoristDeleteAll" class="raised colDangerButton">
                             <span>Delete saved barcodes</span>
                         </button>
                         <div id="ColoristDeleteStatus" class="colStatusLine"></div>
@@ -1190,7 +1198,7 @@
                         + '<div class="listItemBodyText" data-run-title>' + runTitle(run) + '</div>'
                         + '<div class="listItemBodyText secondary" data-run-meta>' + runMeta(run) + '</div>'
                         + '</div>'
-                        + '<button is="emby-button" type="button" class="raised colRunToggle" '
+                        + '<button type="button" class="raised colRunToggle" '
                         + 'data-id="' + escapeHtml(run.RunId) + '"><span>'
                         + (expandedRunId === run.RunId ? 'Hide' : 'Details') + '</span></button>'
                         + '</div>'

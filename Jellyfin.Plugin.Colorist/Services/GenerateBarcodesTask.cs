@@ -112,13 +112,22 @@ namespace Jellyfin.Plugin.Colorist.Services
             using var gate = new SemaphoreSlim(concurrency, concurrency);
             var running = new List<Task>(items.Count);
 
-            foreach (var item in items)
+            // The dispatch loop is inside the try, not beside it. Cancellation lands
+            // here far more often than in the await below, because the loop is where
+            // the run spends its whole life: gate.WaitAsync blocks until a worker
+            // frees up, so at any given moment this is what is executing. With only
+            // the await guarded, a cancelled run escaped run.Cancel entirely and was
+            // recorded by IRunLog.Dispose as "failed" — which is what a user pressing
+            // Cancel was being shown.
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var item in items)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                running.Add(Task.Run(
+                    running.Add(Task.Run(
                     async () =>
                     {
                         // Named before the work rather than after, so the settings
@@ -176,10 +185,8 @@ namespace Jellyfin.Plugin.Colorist.Services
                         }
                     },
                     cancellationToken));
-            }
+                }
 
-            try
-            {
                 await Task.WhenAll(running).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
