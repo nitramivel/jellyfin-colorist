@@ -1,4 +1,5 @@
 using System;
+using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Core.Color;
 using MediaBrowser.Model.Plugins;
 
@@ -119,12 +120,29 @@ namespace Jellyfin.Plugin.Colorist.Configuration
         /// </remarks>
         public double TailTrimPercent { get; set; } = 4.0;
 
-        /// <summary>Gets or sets how many items are processed at once.</summary>
+        /// <summary>
+        /// Gets or sets how many items are processed at once.
+        /// </summary>
         /// <remarks>
-        /// Zero means "decide from the processor count" — see
-        /// <c>BarcodeService</c>, which resolves it to a quarter of the cores.
+        /// Zero means "work it out from <see cref="CpuBudgetPercent"/>". A number
+        /// typed here wins outright — somebody who has measured their own machine
+        /// should not have a percentage quietly override them.
         /// </remarks>
         public int MaxConcurrency { get; set; }
+
+        /// <summary>
+        /// Gets or sets the share of the machine a run may use, as a percentage.
+        /// </summary>
+        /// <remarks>
+        /// Only consulted when <see cref="MaxConcurrency"/> is zero. Workers are the
+        /// only CPU dial there is — one ffmpeg per item, one decoder thread per
+        /// ffmpeg by default — so a percentage of the processor count is close to the
+        /// number of cores in use. It is a budget rather than a ceiling: what holds
+        /// the line when somebody starts watching something is the below-normal
+        /// process priority, and this governs how much of an idle machine a run helps
+        /// itself to. See <see cref="CpuBudget"/>.
+        /// </remarks>
+        public int CpuBudgetPercent { get; set; } = CpuBudget.DefaultPercent;
 
         /// <summary>Gets or sets the decoder thread cap per ffmpeg process. Zero lets ffmpeg decide.</summary>
         public int FfmpegThreads { get; set; } = 1;

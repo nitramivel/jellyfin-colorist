@@ -24,7 +24,7 @@ The .NET 9 SDK is installed per-user and is **not on `PATH` by default**:
 export PATH="$HOME/.dotnet:$PATH"     # required first, in every shell
 
 dotnet build Jellyfin.Plugin.Colorist.sln -c Release
-dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 214 tests, no network, no ffmpeg
+dotnet test  Jellyfin.Plugin.Colorist.sln -c Release    # 241 tests, no network, no ffmpeg
 ./build/package.sh                                       # artifacts/Colorist_<version>/
 VERSION=0.2.0.0 CHANGELOG="..." ./build/release.sh       # zip + manifest.json entry
 ```
@@ -50,6 +50,7 @@ Core/          pure, no I/O, no Jellyfin types — all of it unit tested
   Imaging/     PNG writer (ZLibStream + CRC32), barcode composer — only for the optional PNG
   Runs/        run log document shape, and RunEstimate (throughput → time left)
   BarcodeData  the stored format: pack, unpack, the JSON envelope
+  CpuBudget    share of the machine → items in flight
   SidecarPaths naming and location rules, one extension per artefact
 Services/      everything that touches a process, a file or Jellyfin
   FfmpegRunner        process handling, below-normal priority
@@ -142,6 +143,15 @@ writes the file in about eighty lines. PNG mandates the zlib wrapper that
 **Middleware, not the File Transformation plugin,** for injecting the client script.
 No second plugin to depend on, no cross-plugin contract, no ordering agreement. Same
 conclusion Concierge reached, and the mechanism Jellyfin Enhanced uses.
+
+**CPU is spent by worker count, not by affinity.** `CpuBudget` turns a percentage of
+`Environment.ProcessorCount` into a number of items in flight — one ffmpeg each, one
+decoder thread each, so workers ≈ cores. `ProcessorAffinity` *is* available on Linux
+and Windows (verified), and is deliberately not used: pinning workers to fixed cores
+stops the scheduler moving them out of a transcode's way, which makes playback worse
+in exactly the case below-normal priority exists to protect. The percentage governs an
+idle machine; the priority governs a contended one. `MaxConcurrency` still wins when
+non-zero, because a number somebody typed beats a number derived for them.
 
 **Below-normal ffmpeg priority instead of transcode-aware backoff.** Verified against
 the 10.11 assemblies: `ITranscodeManager` can only look a job up by play session ID,

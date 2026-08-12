@@ -74,7 +74,7 @@ namespace Jellyfin.Plugin.Colorist.Services
         public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             var configuration = Plugin.Instance?.Configuration ?? new PluginConfiguration();
-            var concurrency = BarcodeService.ResolveConcurrency(configuration.MaxConcurrency);
+            var concurrency = BarcodeService.ResolveConcurrency(configuration);
 
             using var run = _runs.Begin(RunKind.Generate, RunTrigger.Scheduled);
 

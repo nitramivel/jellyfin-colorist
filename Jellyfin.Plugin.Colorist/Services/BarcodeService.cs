@@ -369,17 +369,16 @@ namespace Jellyfin.Plugin.Colorist.Services
         }
 
         /// <summary>Resolves the configured concurrency to a real number.</summary>
-        /// <param name="configured">The configured value; zero means auto.</param>
+        /// <param name="configuration">The settings to read the budget from.</param>
         /// <returns>How many items to process at once.</returns>
         /// <remarks>
-        /// A quarter of the processors, at least one. The job competing for CPU here
-        /// is video transcoding for someone who is actually watching something, and
-        /// leaving three quarters of the machine alone is a reasonable default for
-        /// work that nobody is waiting on. Below-normal process priority does the rest.
+        /// The arithmetic lives in <see cref="CpuBudget"/> so it can be tested; this
+        /// only supplies the processor count, which is the part that needs a machine.
         /// </remarks>
-        public static int ResolveConcurrency(int configured) =>
-            configured > 0
-                ? Math.Min(configured, 32)
-                : Math.Max(1, Environment.ProcessorCount / 4);
+        public static int ResolveConcurrency(PluginConfiguration configuration) =>
+            CpuBudget.Workers(
+                configuration.MaxConcurrency,
+                configuration.CpuBudgetPercent,
+                Environment.ProcessorCount);
     }
 }

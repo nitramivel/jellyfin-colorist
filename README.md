@@ -182,8 +182,23 @@ tie back to anything Jellyfin still holds.
 ## Not competing with playback
 
 ffmpeg runs at below-normal process priority, so a viewer starting a transcode
-mid-run takes CPU back rather than queueing behind the barcode job. Concurrency
-defaults to a quarter of the processors, and decoder threads are capped per process.
+mid-run takes CPU back rather than queueing behind the barcode job.
+
+**Share of the machine to use** (*Run* tab) sets how much of an idle server a run
+helps itself to, as a percentage of the processors Jellyfin can see — 25% by default.
+One ffmpeg runs per item and each is capped at one decoder thread, so items in flight
+is close to cores in use, which is what makes a percentage meaningful here. The page
+shows what it resolves to as you drag it: *"25% of 20 processors — 5 items at a time"*.
+
+It is a budget, not a hard ceiling; the priority above is what holds the line under
+contention. Deliberately not processor affinity — pinning workers to fixed cores would
+stop the scheduler moving them out of a transcode's way, making playback worse in
+exactly the case the priority exists to protect. In a container the share is of the
+CPUs Jellyfin has been given rather than the host's, because .NET reports the cgroup
+quota.
+
+Typing a number into **Items at once** overrides the share outright. Decoder threads
+are capped per process separately.
 
 Priority is used rather than pausing on active transcodes because Jellyfin 10.11
 offers no way to ask: `ITranscodeManager` can look a job up by play session ID but

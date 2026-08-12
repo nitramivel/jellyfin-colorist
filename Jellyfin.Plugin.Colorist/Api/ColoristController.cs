@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.Colorist.Configuration;
 using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Core.Runs;
 using Jellyfin.Plugin.Colorist.Services;
@@ -70,8 +71,13 @@ namespace Jellyfin.Plugin.Colorist.Api
         public ActionResult<ColoristStatus> GetStatus()
         {
             var current = _runs.Current();
+            var configuration = Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
-            return new ColoristStatus(current is not null, current);
+            return new ColoristStatus(
+                current is not null,
+                current,
+                Environment.ProcessorCount,
+                BarcodeService.ResolveConcurrency(configuration));
         }
 
         /// <summary>The most recent runs.</summary>
@@ -323,7 +329,17 @@ namespace Jellyfin.Plugin.Colorist.Api
     /// <summary>What the plugin is doing.</summary>
     /// <param name="IsRunning">Whether a run is in progress.</param>
     /// <param name="CurrentRun">The live run, or null when idle.</param>
-    public sealed record ColoristStatus(bool IsRunning, RunLogSummary? CurrentRun);
+    /// <param name="Processors">
+    /// Processors the server can see, so the settings page can say what a CPU share
+    /// resolves to. This is the cgroup-limited count inside a container rather than
+    /// the host's, which is the number the owner is actually budgeting.
+    /// </param>
+    /// <param name="Concurrency">Items the current settings would run at once.</param>
+    public sealed record ColoristStatus(
+        bool IsRunning,
+        RunLogSummary? CurrentRun,
+        int Processors,
+        int Concurrency);
 
     /// <summary>The result of a single-item generation.</summary>
     /// <param name="Outcome">What happened, as the outcome enum's name.</param>

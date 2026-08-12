@@ -58,6 +58,16 @@
                     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
                     gap: 0 1.4em;
                 }
+                /* The CPU share. A plain range input rather than is="emby-*":
+                   customized built-ins upgrade unreliably, and there is no emby
+                   slider to match anyway. */
+                .colBudgetRow { display: flex; align-items: center; gap: 1em; }
+                .colBudgetSlider { flex: 1 1 auto; min-width: 0; accent-color: #00a4dc; }
+                .colBudgetValue {
+                    flex: 0 0 auto; min-width: 3.2em; text-align: right;
+                    font-variant-numeric: tabular-nums; font-weight: 600;
+                }
+
                 /* Run progress. Colours come from the Jellyfin accent rather than
                    hard-coded brand values, so this sits inside whichever dashboard
                    theme is active instead of fighting it. */
@@ -443,9 +453,21 @@
                         algorithm or the trims, or the existing images will never be revisited.
                     </div>
 
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="CpuBudgetPercent">
+                            Share of the machine to use
+                        </label>
+                        <div class="colBudgetRow">
+                            <input type="range" id="CpuBudgetPercent" name="CpuBudgetPercent"
+                                   class="colBudgetSlider" min="5" max="100" step="5" />
+                            <span class="colBudgetValue" id="CpuBudgetValue">25%</span>
+                        </div>
+                        <div class="fieldDescription colNote" id="CpuBudgetNote"></div>
+                    </div>
+
                     <div class="colGrid">
                         <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="MaxConcurrency">Items at once (0 = auto)</label>
+                            <label class="inputLabel inputLabelUnfocused" for="MaxConcurrency">Items at once (0 = use the share)</label>
                             <input is="emby-input" type="number" id="MaxConcurrency" name="MaxConcurrency"
                                    class="emby-input" min="0" max="32" step="1" />
                         </div>
@@ -456,9 +478,16 @@
                         </div>
                     </div>
                     <div class="fieldDescription colNote">
-                        Auto uses a quarter of the processors. Colorist also runs every ffmpeg at below-normal
-                        priority, so a viewer starting a transcode mid-run takes CPU back from the barcode job
-                        rather than queueing behind it.
+                        One ffmpeg runs per item and each is capped at the thread count above, so the number of
+                        items in flight is close to the number of cores in use &mdash; which is what makes a
+                        percentage meaningful here. Typing a number into <strong>items at once</strong> overrides
+                        the share entirely.
+                        <br /><br />
+                        It is a budget rather than a hard ceiling. What holds the line when somebody starts
+                        watching something is the below-normal priority every ffmpeg runs at, so a viewer takes
+                        CPU back from the run rather than queueing behind it; this setting governs how much of an
+                        <em>idle</em> machine a run helps itself to. In a container the share is of the CPUs
+                        Jellyfin has been given, not the host's.
                     </div>
 
                     <div class="colCard">
@@ -564,6 +593,52 @@
                 }
             }
 
+            /*
+             * Says what the share actually resolves to on this server.
+             *
+             * The processor count comes from the status endpoint, because the browser
+             * has no idea what the server has — navigator.hardwareConcurrency is the
+             * machine looking at the page, which is very often not the machine doing
+             * the work. Until that arrives the note says the percentage and nothing
+             * more, rather than guessing.
+             *
+             * Mirrors CpuBudget.Workers, including the rounding: integer division
+             * gave 50% of three cores as one, and the half that rounds down is the
+             * half that matters on the small servers this most affects.
+             */
+            var serverProcessors = 0;
+
+            function syncCpuBudget() {
+                var percent = parseInt(page.querySelector('#CpuBudgetPercent').value, 10) || 25;
+                var explicitWorkers = parseInt(page.querySelector('#MaxConcurrency').value, 10) || 0;
+                var slider = page.querySelector('#CpuBudgetPercent');
+
+                page.querySelector('#CpuBudgetValue').textContent = percent + '%';
+
+                // The share does nothing while an explicit count is set, and a live
+                // control that has no effect is worse than a disabled one.
+                slider.disabled = explicitWorkers > 0;
+
+                var note = page.querySelector('#CpuBudgetNote');
+
+                if (explicitWorkers > 0) {
+                    note.textContent = 'Overridden — ' + explicitWorkers + ' item'
+                        + (explicitWorkers === 1 ? '' : 's') + ' at a time, as set below.';
+                    return;
+                }
+
+                if (!serverProcessors) {
+                    note.textContent = 'Of the processors Jellyfin can see.';
+                    return;
+                }
+
+                var workers = Math.round(serverProcessors * percent / 100);
+                workers = Math.max(1, Math.min(Math.min(serverProcessors, 32), workers));
+
+                note.textContent = percent + '% of ' + serverProcessors + ' processors — '
+                    + workers + ' item' + (workers === 1 ? '' : 's') + ' at a time.';
+            }
+
             function syncCropFields() {
                 var mode = page.querySelector('#CropMode').value;
                 page.querySelector('#FixedCropFields').style.display = mode === 'Fixed' ? '' : 'none';
@@ -650,9 +725,12 @@
                     page.querySelector('#IncludeEpisodes').checked = config.IncludeEpisodes;
                     page.querySelector('#ForceRegenerate').checked = config.ForceRegenerate;
                     page.querySelector('#MaxConcurrency').value = config.MaxConcurrency;
+                    page.querySelector('#CpuBudgetPercent').value =
+                        config.CpuBudgetPercent === undefined ? 25 : config.CpuBudgetPercent;
                     page.querySelector('#FfmpegThreads').value = config.FfmpegThreads;
 
                     syncCropFields();
+                    syncCpuBudget();
                     Dashboard.hideLoadingMsg();
                 });
             }
@@ -701,6 +779,7 @@
                     config.IncludeEpisodes = page.querySelector('#IncludeEpisodes').checked;
                     config.ForceRegenerate = page.querySelector('#ForceRegenerate').checked;
                     config.MaxConcurrency = numberOf('#MaxConcurrency', 0);
+                    config.CpuBudgetPercent = numberOf('#CpuBudgetPercent', 25);
                     config.FfmpegThreads = numberOf('#FfmpegThreads', 1);
 
                     return ApiClient.updatePluginConfiguration(pluginId, config);
@@ -738,6 +817,11 @@
             });
 
             page.querySelector('#CropMode').addEventListener('change', syncCropFields);
+
+            // input, not change: the number has to follow the thumb while it is
+            // being dragged, or the control reads as broken.
+            page.querySelector('#CpuBudgetPercent').addEventListener('input', syncCpuBudget);
+            page.querySelector('#MaxConcurrency').addEventListener('input', syncCpuBudget);
 
             page.querySelector('#ColoristConfigForm').addEventListener('submit', function (event) {
                 event.preventDefault();
@@ -1111,6 +1195,14 @@
                     dataType: 'json'
                 }).then(function (status) {
                     if (generation !== pollGeneration) { return; }
+
+                    // The server's processor count, which the CPU share is a
+                    // percentage of. Comes down with every status so the note is
+                    // right even on a page that has been open across a restart.
+                    if (status && status.Processors && status.Processors !== serverProcessors) {
+                        serverProcessors = status.Processors;
+                        syncCpuBudget();
+                    }
 
                     var running = status && status.IsRunning;
 
