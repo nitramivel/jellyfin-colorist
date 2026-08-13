@@ -336,12 +336,21 @@ ffmpeg on the development machine. Specifically unverified:
   the document; and an unparseable gradient does leave `style.backgroundImage` empty,
   which is what the sRGB fallback detects. What remains unverified is the selectors
   matching a *real* Jellyfin page.
-- **The bottom bleed.** `bottomBleed` sums `padding-bottom` from the anchor up to the
+- **The two bleeds.** `bottomBleed` sums `padding-bottom` from the anchor up to the
   nearest `.page` and cancels the total with a negative margin, so the strip ends
   where the document does instead of floating above `.page`'s `5em` + safe-area
   inset. The walk stops at `.page` deliberately — going further would pull the strip
-  through the application shell and over the navigation bar. If the strip sits too
-  low or too high on a real client, this is the function to look at.
+  through the application shell and over the navigation bar. `topBleed` closes the
+  other end, measuring from the previous sibling's bottom to the strip's top and
+  cancelling that, so the strip sits at the foot of the content section rather than in
+  the page background below it — **this was wrong on a real page until 0.4.2.0**, where
+  a band of background between the last row of cards and the strip read as the strip
+  having come loose and landed underneath. It resets its own margin before measuring,
+  or a resize would collapse the gap again on every call, and ignores anything above
+  `MAX_TOP_BLEED` on the grounds that a measurement that absurd is a wrong one and
+  doing nothing beats dragging the strip up through the cards. If the strip sits too
+  low, too high, or too close to the row above it on a real client, these two are the
+  functions to look at.
 - **Whether `-skip_frame nokey` plus `showinfo` reports timestamps rebased by the
   input seek** as assumed. If sampling comes out time-shifted, this is the first
   place to look.

@@ -313,22 +313,63 @@
     }
 
     /*
-     * Cancels the padding standing between the strip and the edges of the page, so
-     * it spans the full width whichever anchor was used and ends where the page
-     * ends.
+     * How far the strip has to be pulled up to close the gap above it.
      *
-     * Measured rather than hard-coded because the padding is not a constant: the
-     * shipped stylesheet uses 32.45vw on wide layouts, 5% on narrow ones, and
-     * mirrors left and right for right-to-left languages. A fixed negative margin
-     * would be correct at exactly one window size.
+     * The strip belongs to the foot of the content section — under the last row of
+     * cards, filling the space at the bottom of it — rather than floating in the page
+     * background below everything. That space is not the strip's own margin: it is
+     * whatever the last section leaves behind it, which on a detail page is the
+     * bottom margin of a cards row and is written in em. So it is measured, from the
+     * bottom of the previous element to the top of ours, exactly as the bottom bleed
+     * is and for the same reason — a fixed number would be right at one font size and
+     * one window width.
+     *
+     * Bounded, because this is arithmetic on somebody else's layout: a gap that comes
+     * back absurd means the measurement is wrong, and doing nothing is much better
+     * than dragging the strip up through the cards.
+     */
+    var MAX_TOP_BLEED = 400;
+
+    function topBleed(container) {
+        var previous = container.previousElementSibling;
+
+        if (!previous) {
+            return 0;
+        }
+
+        try {
+            // Reset first: on a re-measure this has already been applied, and reading
+            // the collapsed gap would collapse it again on every resize.
+            container.style.marginTop = '0';
+
+            var gap = container.getBoundingClientRect().top
+                - previous.getBoundingClientRect().bottom;
+
+            return gap > 0 && gap < MAX_TOP_BLEED ? gap : 0;
+        } catch (error) {
+            return 0;
+        }
+    }
+
+    /*
+     * Cancels the padding standing between the strip and the edges of the page, so
+     * it spans the full width whichever anchor was used, sits at the foot of the
+     * content rather than below it, and ends where the page ends.
+     *
+     * Measured rather than hard-coded because none of these are constants: the
+     * shipped stylesheet uses 32.45vw on wide layouts, 5% on narrow ones, and mirrors
+     * left and right for right-to-left languages. A fixed negative margin would be
+     * correct at exactly one window size.
      */
     function applyBleed(container, anchor) {
         var padding = paddingOf(anchor);
         var bottom = bottomBleed(anchor);
+        var top = topBleed(container);
 
         container.style.marginLeft = padding.left ? '-' + padding.left + 'px' : '0';
         container.style.marginRight = padding.right ? '-' + padding.right + 'px' : '0';
         container.style.marginBottom = bottom ? '-' + bottom + 'px' : '0';
+        container.style.marginTop = top ? '-' + top + 'px' : '0';
     }
 
     function removeStrip() {
@@ -635,7 +676,13 @@
         container.title = 'Colour sampled across the runtime, left to right.'
             + ' Click to play from a point.';
         container.style.cssText = [
-            'margin-top: 2.5em',
+            // No gap above. The strip closes the page rather than floating below it:
+            // it fills the space at the foot of the content section and ends where
+            // that section ends, which is what bottomBleed cancels the padding for.
+            // A 2.5em margin here left a band of page background between the last row
+            // of cards and the strip, which read as the strip having come loose from
+            // the page and landed underneath it.
+            'margin-top: 0',
             'padding: 0',
             'line-height: 0',
             'overflow: hidden',
