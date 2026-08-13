@@ -18,6 +18,21 @@ namespace Jellyfin.Plugin.Colorist.Configuration
         Fixed = 2,
     }
 
+    /// <summary>How the strip is drawn from the colours that were sampled.</summary>
+    public enum BarcodeStyle
+    {
+        /// <summary>One hard-edged stripe per sample.</summary>
+        Stripes = 0,
+
+        /// <summary>Every sample blended into its neighbour.</summary>
+        Blended = 1,
+
+        /// <summary>
+        /// The whole strip as one gradient, averaged down to a few bands first.
+        /// </summary>
+        Gradient = 2,
+    }
+
     /// <summary>Colorist's settings.</summary>
     /// <remarks>
     /// <b>An enum here crosses the wire as its name, not its number.</b> Jellyfin's
@@ -82,13 +97,46 @@ namespace Jellyfin.Plugin.Colorist.Configuration
         /// <summary>Gets or sets the height of the optional PNG, in pixels.</summary>
         public int OutputHeight { get; set; } = 240;
 
-        /// <summary>Gets or sets whether stripes blend into each other.</summary>
+        /// <summary>
+        /// Gets or sets whether stripes blend into each other. Superseded by
+        /// <see cref="Style"/>.
+        /// </summary>
         /// <remarks>
-        /// Applies to the strip on the detail page and to the optional PNG alike. The
-        /// page reads this through the client script, so changing it takes effect on
-        /// the next page load without regenerating anything.
+        /// Kept only so an existing server does not lose its choice. Read once, by
+        /// <see cref="ResolveStyle"/>, and only while <see cref="Style"/> is null; the
+        /// settings page always writes <see cref="Style"/>, so the first save after an
+        /// upgrade retires this permanently. Nothing else should read it.
         /// </remarks>
         public bool Smooth { get; set; }
+
+        /// <summary>Gets or sets how the strip is drawn, or null on a server that has never said.</summary>
+        /// <remarks>
+        /// <b>Nullable on purpose.</b> An enum has no way to spell "not chosen", and
+        /// its zero value here is <see cref="BarcodeStyle.Stripes"/> — a real choice
+        /// somebody may have made. Defaulting to it would read every pre-0.4 config,
+        /// which cannot contain this element at all, as a deliberate request for hard
+        /// stripes, and would silently turn blending off for everyone who had it on.
+        /// Null means the question predates the setting, which is what
+        /// <see cref="ResolveStyle"/> uses <see cref="Smooth"/> to answer.
+        /// <para>
+        /// Crosses the wire as a name, like <see cref="CropMode"/> — so the page's
+        /// option values must be these member names exactly.
+        /// </para>
+        /// </remarks>
+        public BarcodeStyle? Style { get; set; }
+
+        /// <summary>
+        /// Gets or sets how many bands <see cref="BarcodeStyle.Gradient"/> averages down to.
+        /// </summary>
+        /// <remarks>
+        /// Sixteen across a strip that is usually the full width of a window puts each
+        /// band around a hundred pixels wide, which no eye reads as a band once the
+        /// joins are interpolated. Lower is a colour wash of the film; higher keeps
+        /// more of its shape until, somewhere past a hundred, it converges on
+        /// <see cref="BarcodeStyle.Blended"/> and the bands become visible again.
+        /// Clamped where it is used rather than trusted here.
+        /// </remarks>
+        public int GradientBands { get; set; } = 16;
 
         /// <summary>Gets or sets how black bars are handled.</summary>
         public CropMode CropMode { get; set; } = CropMode.Auto;
@@ -202,6 +250,24 @@ namespace Jellyfin.Plugin.Colorist.Configuration
 
         /// <summary>Gets or sets the height the strip is displayed at, in CSS pixels.</summary>
         public int DisplayHeight { get; set; } = 90;
+
+        /// <summary>Works out how the strip should be drawn.</summary>
+        /// <returns>The chosen style, or the one the old boolean implied.</returns>
+        /// <remarks>
+        /// The single place either field is interpreted, so the upgrade rule lives in
+        /// one testable method rather than at every call site.
+        /// </remarks>
+        public BarcodeStyle ResolveStyle() =>
+            Style ?? (Smooth ? BarcodeStyle.Blended : BarcodeStyle.Stripes);
+
+        /// <summary>The band count as the drawing code should use it.</summary>
+        /// <returns>The clamped band count.</returns>
+        /// <remarks>
+        /// Two is the fewest that is still a gradient rather than a flat wash. The
+        /// upper bound is the column count's, since asking for more bands than there
+        /// are samples is answered by returning the samples unchanged anyway.
+        /// </remarks>
+        public int ResolveGradientBands() => Math.Clamp(GradientBands, 2, 4000);
 
         /// <summary>Reads the colour knobs out as the value type Core expects.</summary>
         /// <returns>The clamped colour options.</returns>

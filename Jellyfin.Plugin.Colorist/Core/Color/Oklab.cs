@@ -134,16 +134,10 @@ namespace Jellyfin.Plugin.Colorist.Core.Color
         /// <returns>Whether the two differ.</returns>
         public static bool operator !=(Oklab left, Oklab right) => !left.Equals(right);
 
-        private static float ToLinear(byte channel)
-        {
-            var c = channel / 255f;
-            return c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
-        }
+        // The sRGB transfer function itself lives on Rgb, because band averaging needs
+        // it too and two copies of it would be two things to get wrong.
+        private static float ToLinear(byte channel) => Rgb.ToLinear(channel);
 
-        private static byte FromLinear(float c)
-        {
-            var v = c <= 0.0031308f ? c * 12.92f : (1.055f * MathF.Pow(c, 1f / 2.4f)) - 0.055f;
-            return (byte)Math.Clamp((int)MathF.Round(v * 255f), 0, 255);
-        }
+        private static byte FromLinear(float c) => Rgb.FromLinear(c);
     }
 }

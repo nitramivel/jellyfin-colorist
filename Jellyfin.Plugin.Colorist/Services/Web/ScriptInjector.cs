@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.Colorist.Configuration;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -47,8 +48,17 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
         [GeneratedRegex(@"var DISPLAY_HEIGHT = \d+;")]
         private static partial Regex DisplayHeightLine();
 
-        [GeneratedRegex(@"var SMOOTH = (?:true|false);")]
-        private static partial Regex SmoothLine();
+        [GeneratedRegex(@"var STYLE = '[a-z]*';")]
+        private static partial Regex StyleLine();
+
+        [GeneratedRegex(@"var GRADIENT_BANDS = \d+;")]
+        private static partial Regex GradientBandsLine();
+
+        [GeneratedRegex(@"var HEAD_TRIM = [\d.]+;")]
+        private static partial Regex HeadTrimLine();
+
+        [GeneratedRegex(@"var TAIL_TRIM = [\d.]+;")]
+        private static partial Regex TailTrimLine();
 
         /// <summary>
         /// The script's content hash, used as both cache-buster and entity tag.
@@ -109,7 +119,13 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
 
             return script.Length == 0 || configuration is null
                 ? script
-                : Apply(script, configuration.DisplayHeight, configuration.Smooth);
+                : Apply(
+                    script,
+                    configuration.DisplayHeight,
+                    configuration.ResolveStyle(),
+                    configuration.ResolveGradientBands(),
+                    configuration.HeadTrimPercent,
+                    configuration.TailTrimPercent);
         }
 
         /// <summary>
@@ -117,7 +133,10 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
         /// </summary>
         /// <param name="script">The script as it sits in the assembly.</param>
         /// <param name="displayHeight">The strip's height in CSS pixels; clamped here.</param>
-        /// <param name="smooth">Whether stripes blend into each other.</param>
+        /// <param name="style">How the strip is drawn.</param>
+        /// <param name="gradientBands">How many bands the gradient style averages down to.</param>
+        /// <param name="headTrimPercent">Fraction of runtime skipped at the start.</param>
+        /// <param name="tailTrimPercent">Fraction of runtime skipped at the end.</param>
         /// <returns>The script as it should be served.</returns>
         /// <remarks>
         /// Split from <see cref="Configured"/> so it can be tested: that method reads
@@ -133,7 +152,13 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
         /// is what the tests around this are for.
         /// </para>
         /// </remarks>
-        public static string Apply(string script, int displayHeight, bool smooth)
+        public static string Apply(
+            string script,
+            int displayHeight,
+            BarcodeStyle style,
+            int gradientBands,
+            double headTrimPercent,
+            double tailTrimPercent)
         {
             var height = Math.Clamp(displayHeight, 20, 400);
 
@@ -141,10 +166,39 @@ namespace Jellyfin.Plugin.Colorist.Services.Web
                 script,
                 "var DISPLAY_HEIGHT = " + height.ToString(CultureInfo.InvariantCulture) + ";");
 
-            return SmoothLine().Replace(
+            // Lower-cased so the script compares against a plain string rather than
+            // carrying the enum's casing into JavaScript, where nothing else is
+            // PascalCase.
+            script = StyleLine().Replace(
                 script,
-                "var SMOOTH = " + (smooth ? "true" : "false") + ";");
+                "var STYLE = '" + style.ToString().ToLowerInvariant() + "';");
+
+            script = GradientBandsLine().Replace(
+                script,
+                "var GRADIENT_BANDS = " + gradientBands.ToString(CultureInfo.InvariantCulture) + ";");
+
+            // The trims are what turn a position on the strip into a time in the film,
+            // and they are configuration rather than per-item — so they travel with the
+            // script, like the height, instead of in the per-item response.
+            script = HeadTrimLine().Replace(
+                script,
+                "var HEAD_TRIM = " + Trim(headTrimPercent) + ";");
+
+            return TailTrimLine().Replace(
+                script,
+                "var TAIL_TRIM = " + Trim(tailTrimPercent) + ";");
         }
+
+        /// <summary>
+        /// Formats a trim percentage as a JavaScript number literal.
+        /// </summary>
+        /// <remarks>
+        /// Invariant, so a server running under a comma-decimal culture does not emit
+        /// <c>var HEAD_TRIM = 0,5;</c> — which is valid JavaScript, assigns 0, and
+        /// would be found by nobody. Rounded to the same range the planner clamps to.
+        /// </remarks>
+        private static string Trim(double percent) =>
+            Math.Round(Math.Clamp(percent, 0, 40), 3).ToString(CultureInfo.InvariantCulture);
 
         /// <summary>
         /// Inserts the script tag into a document.
