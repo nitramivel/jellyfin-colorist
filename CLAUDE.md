@@ -169,6 +169,24 @@ drifts by the difference. `HEAD_TRIM`/`TAIL_TRIM` are emitted through
 `CultureInfo.InvariantCulture`, or a comma-decimal server would serve
 `var HEAD_TRIM = 0,5;` — valid JavaScript that assigns 0 and would be found by nobody.
 
+**Clicking the strip plays through a session command, because there is no local
+handle on the player.** `playbackManager` is a webpack module, and the only thing
+10.11 puts on `window` is `Emby.Page`, the router — verified by grepping the served
+bundles, including all 927 lazy chunks, which never call `sendPlayCommand` either. So
+`playFrom` takes the route Jellyfin's own remote control takes: find this device's
+session with `getSessions({ deviceId })`, `sendPlayCommand(id, { itemIds, playCommand:
+'PlayNow', startPositionTicks })`, and let the command arrive back over the websocket
+this tab already holds, where the client's own handler calls
+`playbackManager.play(...)` with the start position. `ApiClient` carries it, so the
+authorization header, server address and device identity are not ours to assemble.
+This is the mechanism the Media Bar plugin uses on this same server, which is the only
+reason to believe the query names are right — the endpoint is in `Jellyfin.Api`, not in
+the `Jellyfin.Controller` assemblies this repo can reflect over, and the server's
+OpenAPI document is not served. **If a click ever stops starting playback, those three
+query parameters are the first thing to check.** Note the consequence of asking for a
+session: on a server that restricts `GET /Sessions`, a viewer who is not the owner may
+be refused and a click then does nothing at all, deliberately.
+
 **The tabs are the exception, and are not buttons in the emby sense.** Plain
 `<button class="colTab" role="tab">`, underlined when active — a tab labels which
 panel you are looking at rather than being a raised, pressable thing, and Jellyfin's
@@ -299,6 +317,15 @@ ffmpeg on the development machine. Specifically unverified:
   extension point and no stable DOM contract. Anchor selectors have fallbacks and the
   script no-ops when they all miss, but expect this file to need adjustment. It must
   never touch a node it did not create.
+
+  **The play command has never reached a real session.** `playFrom` was exercised under
+  Node against a stubbed `ApiClient` — the call shape, the tick arithmetic and both
+  failure paths — which proves what it *sends*, not that the server accepts it or that
+  the websocket round trip lands. The three query parameters come from a working plugin
+  rather than from an assembly this repo can reflect over. Whether a tap on a
+  touchscreen plays or merely shows the readout is also untested: a tap usually
+  synthesises `mouseenter` before `click`, so the first one may only resolve the runtime
+  and the second play.
 
   Its *rendering* has now been exercised against a browser, using a throwaway page
   that mimics the 10.11 layout (`.page` with `padding-bottom: 5em`,

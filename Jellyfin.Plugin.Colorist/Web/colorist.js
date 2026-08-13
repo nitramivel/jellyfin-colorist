@@ -432,6 +432,49 @@
     }
 
     /*
+     * Starts this item playing at a given second, in this tab.
+     *
+     * There is no local entry point to reach for: playbackManager is a webpack module
+     * and the only thing 10.11 puts on window is Emby.Page, the router. What does work
+     * is the route Jellyfin's own remote control uses — POST the play command to our
+     * own session and let it arrive back over the websocket this tab is already
+     * holding, where the client's handler calls playbackManager.play with the start
+     * position. Same mechanism the Media Bar plugin uses to start playback from a
+     * page, and it is reached through ApiClient, so the Authorization header, the
+     * server address and the device identity are all its problem rather than ours.
+     *
+     * Finding the session means asking for it by device rather than listing every
+     * session on the server. Worth knowing: on a server where that listing is
+     * restricted, a viewer who is not the owner may be refused, and then a click does
+     * nothing — deliberately nothing, rather than an error thrown across the page.
+     */
+    function playFrom(itemId, seconds) {
+        var client = window.ApiClient;
+
+        if (!client
+            || typeof client.getSessions !== 'function'
+            || typeof client.sendPlayCommand !== 'function'
+            || typeof client.deviceId !== 'function') {
+            return Promise.reject(new Error('no playback API'));
+        }
+
+        return client.getSessions({ deviceId: client.deviceId() }).then(function (sessions) {
+            var session = sessions && sessions.length ? sessions[0] : null;
+
+            if (!session || !session.Id) {
+                return Promise.reject(new Error('no session for this device'));
+            }
+
+            return client.sendPlayCommand(session.Id, {
+                itemIds: itemId,
+                playCommand: 'PlayNow',
+                // Ticks are 100-nanosecond units, so ten million to the second.
+                startPositionTicks: Math.max(0, Math.round(seconds * 10000000))
+            });
+        });
+    }
+
+    /*
      * The hover readout: where in the film the colour under the pointer came from.
      *
      * Built rather than left to the title attribute, which cannot follow a pointer —
@@ -486,19 +529,63 @@
             runtimeFor(itemId).then(function (runtimeSeconds) {
                 span = sampledWindow(runtimeSeconds);
 
-                // The descriptive title would otherwise pop up over the readout a
-                // second into every hover. Dropped only once there is something better
-                // to say: a server that will not give up a runtime keeps it.
                 if (span) {
+                    // The descriptive title would otherwise pop up over the readout a
+                    // second into every hover. Dropped only once there is something
+                    // better to say: a server that will not give up a runtime keeps it.
                     container.removeAttribute('title');
+
+                    // Only looks clickable once there is a time to click to. A strip
+                    // whose runtime never arrived stays an ordinary picture rather than
+                    // inviting a click that could not do anything.
+                    container.style.cursor = 'pointer';
                 }
             }, function () {
                 span = null;
             });
         }
 
+        function timeAt(event) {
+            var rect = container.getBoundingClientRect();
+
+            if (!span || rect.width <= 0) {
+                return null;
+            }
+
+            var x = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
+
+            return span.start + ((x / rect.width) * (span.end - span.start));
+        }
+
+        function play(event) {
+            var seconds = timeAt(event);
+
+            if (seconds === null) {
+                return;
+            }
+
+            // Said before it happens, because the command is a round trip through the
+            // server and back over the websocket — without this, a click looks like it
+            // did nothing for as long as that takes.
+            label.textContent = 'Playing from ' + clockOf(seconds) + '…';
+            label.style.display = 'block';
+
+            playFrom(itemId, seconds).then(null, function (error) {
+                // Nothing else to do: the page is not ours to put an error on, and the
+                // strip is still a strip. The label goes back to reading the time so it
+                // does not sit there claiming something is playing.
+                label.textContent = clockOf(seconds);
+
+                if (window.console && window.console.debug) {
+                    window.console.debug('Colorist: could not start playback', error);
+                }
+            });
+        }
+
         function place(event) {
-            if (!span) {
+            var seconds = timeAt(event);
+
+            if (seconds === null) {
                 // No runtime to map onto — either still arriving, or the server would
                 // not say. Leave the strip alone rather than show a percentage nobody
                 // asked for.
@@ -506,16 +593,9 @@
             }
 
             var rect = container.getBoundingClientRect();
-
-            if (rect.width <= 0) {
-                hide();
-                return;
-            }
-
             var x = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
 
-            label.textContent = clockOf(
-                span.start + ((x / rect.width) * (span.end - span.start)));
+            label.textContent = clockOf(seconds);
 
             line.style.left = x + 'px';
             line.style.display = 'block';
@@ -532,6 +612,7 @@
         container.addEventListener('mouseenter', safely(enter));
         container.addEventListener('mousemove', safely(place));
         container.addEventListener('mouseleave', safely(hide));
+        container.addEventListener('click', safely(play));
     }
 
     function buildStrip(itemId, colours) {
@@ -548,7 +629,11 @@
         var container = document.createElement('div');
         container.id = CONTAINER_ID;
         container.setAttribute('data-item-id', itemId);
-        container.title = 'Colour sampled across the runtime, left to right';
+        // Replaced by the live readout on the first hover, so this is what a strip says
+        // before anybody has moved a pointer across it — and where the click is
+        // advertised, since a bar of colour does not otherwise look pressable.
+        container.title = 'Colour sampled across the runtime, left to right.'
+            + ' Click to play from a point.';
         container.style.cssText = [
             'margin-top: 2.5em',
             'padding: 0',
