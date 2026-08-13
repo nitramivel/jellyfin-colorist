@@ -246,6 +246,56 @@ namespace Jellyfin.Plugin.Colorist.Tests
         }
 
         [Fact]
+        public void BandsAreIgnoredWhenNotSmoothing()
+        {
+            // Reducing and then banding would draw a handful of wide blocks, which is
+            // the one combination nothing wants, so the samples stay exact.
+            var pixels = BarcodeComposer.Compose([Red, Blue], 4, 1, smooth: false, bands: 2);
+
+            Assert.Equal(new byte[] { 255, 0, 0 }, pixels[0..3]);
+            Assert.Equal(new byte[] { 0, 0, 255 }, pixels[9..12]);
+        }
+
+        [Fact]
+        public void ReducingToBandsFlattensDetailTheBlendKeeps()
+        {
+            // The difference between the two smooth styles, and the whole point of the
+            // gradient: alternating red and blue every sample is a strip that swings
+            // between them, and averaging it down to two bands is a strip that barely
+            // moves. Measured as the total change from pixel to pixel, which is high
+            // for the blend and near zero once the detail has been averaged away.
+            var alternating = new Rgb[64];
+
+            for (var i = 0; i < alternating.Length; i++)
+            {
+                alternating[i] = i % 2 == 0 ? Red : Blue;
+            }
+
+            var blended = BarcodeComposer.Compose(alternating, 256, 1, smooth: true);
+            var gradient = BarcodeComposer.Compose(alternating, 256, 1, smooth: true, bands: 2);
+
+            Assert.True(
+                Variation(gradient, 256) < Variation(blended, 256) / 10,
+                $"gradient variation {Variation(gradient, 256)} should be far below "
+                + $"blended {Variation(blended, 256)}");
+        }
+
+        private static int Variation(byte[] pixels, int width)
+        {
+            var total = 0;
+
+            for (var x = 1; x < width; x++)
+            {
+                for (var channel = 0; channel < 3; channel++)
+                {
+                    total += Math.Abs(pixels[(x * 3) + channel] - pixels[((x - 1) * 3) + channel]);
+                }
+            }
+
+            return total;
+        }
+
+        [Fact]
         public void SingleColumnFillsTheWholeImage()
         {
             var pixels = BarcodeComposer.Compose([Red], 5, 2, smooth: true);

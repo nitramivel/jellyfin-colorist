@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using Jellyfin.Plugin.Colorist.Configuration;
 using Jellyfin.Plugin.Colorist.Core;
 using Jellyfin.Plugin.Colorist.Core.Color;
 using Jellyfin.Plugin.Colorist.Core.Sampling;
@@ -562,42 +563,100 @@ namespace Jellyfin.Plugin.Colorist.Tests
         }
 
         [Fact]
-        public void TheBlendingSettingCanReachTheScript()
+        public void EveryDisplaySettingCanReachTheScript()
         {
-            // Same regex substitution as the height, same silent failure if the
-            // declaration is reworded — and blending is now a client-side decision,
-            // so this is the only route it has.
+            // Same regex substitution as the height, same silent failure if any
+            // declaration is reworded — and all of these are client-side decisions, so
+            // this is the only route they have.
             var script = ScriptInjector.ReadScript();
 
-            Assert.Matches(@"var SMOOTH = (?:true|false);", script);
+            Assert.Matches(@"var STYLE = '[a-z]*';", script);
+            Assert.Matches(@"var GRADIENT_BANDS = \d+;", script);
+            Assert.Matches(@"var HEAD_TRIM = [\d.]+;", script);
+            Assert.Matches(@"var TAIL_TRIM = [\d.]+;", script);
         }
 
         [Theory]
-        [InlineData(true, "var SMOOTH = true;")]
-        [InlineData(false, "var SMOOTH = false;")]
-        public void BlendingCanBeToggledWithoutRegeneratingAnything(bool smooth, string expected)
+        [InlineData(BarcodeStyle.Stripes, "var STYLE = 'stripes';")]
+        [InlineData(BarcodeStyle.Blended, "var STYLE = 'blended';")]
+        [InlineData(BarcodeStyle.Gradient, "var STYLE = 'gradient';")]
+        public void TheStyleCanBeChangedWithoutRegeneratingAnything(
+            BarcodeStyle style,
+            string expected)
         {
-            // The whole point of storing colours rather than an image: this setting
-            // is applied when the page draws, so flipping it costs a page load and
-            // not another ffmpeg pass over the library. If the substitution stops
-            // matching, the checkbox silently does nothing.
-            var served = ScriptInjector.Apply(ScriptInjector.ReadScript(), 90, smooth);
+            // The whole point of storing colours rather than an image: this setting is
+            // applied when the page draws, so changing it costs a page load and not
+            // another ffmpeg pass over the library. If the substitution stops matching,
+            // the control silently does nothing.
+            var served = Served(style: style);
 
             Assert.Contains(expected, served, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void TheTwoBlendingSettingsProduceDifferentScripts()
+        public void EachStyleProducesADifferentScript()
         {
-            // Which is what makes the cache fingerprint change with the setting —
-            // the served URL is a hash of this text, so a browser holding the old
-            // script refetches instead of running it forever.
-            var script = ScriptInjector.ReadScript();
+            // Which is what makes the cache fingerprint change with the setting — the
+            // served URL is a hash of this text, so a browser holding the old script
+            // refetches instead of running it forever.
+            var stripes = Served(style: BarcodeStyle.Stripes);
+            var blended = Served(style: BarcodeStyle.Blended);
+            var gradient = Served(style: BarcodeStyle.Gradient);
 
-            Assert.NotEqual(
-                ScriptInjector.Apply(script, 90, true),
-                ScriptInjector.Apply(script, 90, false));
+            Assert.NotEqual(stripes, blended);
+            Assert.NotEqual(blended, gradient);
+            Assert.NotEqual(stripes, gradient);
         }
+
+        [Fact]
+        public void TheBandCountReachesTheScript()
+        {
+            Assert.Contains("var GRADIENT_BANDS = 24;", Served(bands: 24), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void TheTrimsReachTheScriptAsInvariantNumbers()
+        {
+            // A comma-decimal culture would emit "var HEAD_TRIM = 0,5;" — valid
+            // JavaScript that assigns 0 and would be noticed by nobody, since the
+            // readout would simply be wrong by half a percent of the runtime.
+            var previous = CultureInfo.CurrentCulture;
+
+            try
+            {
+                CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+
+                var served = Served(head: 0.5, tail: 4.25);
+
+                Assert.Contains("var HEAD_TRIM = 0.5;", served, StringComparison.Ordinal);
+                Assert.Contains("var TAIL_TRIM = 4.25;", served, StringComparison.Ordinal);
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = previous;
+            }
+        }
+
+        [Theory]
+        [InlineData(-5, "var HEAD_TRIM = 0;")]
+        [InlineData(90, "var HEAD_TRIM = 40;")]
+        public void TheTrimsAreClampedOnTheWayOutAsThePlannerClampsThem(
+            double configured,
+            string expected)
+        {
+            // The client reproduces the planner's window from these, so a value the
+            // planner would have clamped has to arrive clamped or the readout maps a
+            // window that was never sampled.
+            Assert.Contains(expected, Served(head: configured), StringComparison.Ordinal);
+        }
+
+        private static string Served(
+            int height = 90,
+            BarcodeStyle style = BarcodeStyle.Stripes,
+            int bands = 16,
+            double head = 0.5,
+            double tail = 4)
+            => ScriptInjector.Apply(ScriptInjector.ReadScript(), height, style, bands, head, tail);
 
         [Theory]
         [InlineData(0, 20)]
@@ -605,7 +664,7 @@ namespace Jellyfin.Plugin.Colorist.Tests
         [InlineData(90, 90)]
         public void TheDisplayHeightIsClampedOnTheWayOut(int configured, int expected)
         {
-            var served = ScriptInjector.Apply(ScriptInjector.ReadScript(), configured, false);
+            var served = Served(height: configured);
 
             Assert.Contains(
                 "var DISPLAY_HEIGHT = " + expected.ToString(CultureInfo.InvariantCulture) + ";",

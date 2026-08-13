@@ -14,6 +14,13 @@ namespace Jellyfin.Plugin.Colorist.Core.Imaging
         /// <param name="width">Output width in pixels.</param>
         /// <param name="height">Output height in pixels.</param>
         /// <param name="smooth">Whether to blend between adjacent samples rather than banding.</param>
+        /// <param name="bands">
+        /// When positive, the samples are averaged down to this many colours first, so
+        /// the result is one gradient across the whole strip rather than every sample
+        /// blended into its neighbour. Only meaningful with <paramref name="smooth"/>:
+        /// reducing and then banding would draw a few wide blocks, which is the one
+        /// combination nothing asks for, so it is ignored there.
+        /// </param>
         /// <returns>A tightly-packed rgb24 buffer of width × height × 3 bytes.</returns>
         /// <exception cref="ArgumentException">No columns were supplied.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Dimensions are not positive.</exception>
@@ -21,7 +28,8 @@ namespace Jellyfin.Plugin.Colorist.Core.Imaging
             IReadOnlyList<Rgb> columns,
             int width,
             int height,
-            bool smooth)
+            bool smooth,
+            int bands = 0)
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
             ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -29,6 +37,11 @@ namespace Jellyfin.Plugin.Colorist.Core.Imaging
             if (columns.Count == 0)
             {
                 throw new ArgumentException("A barcode needs at least one sample.", nameof(columns));
+            }
+
+            if (smooth && bands > 0)
+            {
+                columns = ColourBands.Reduce(columns, bands);
             }
 
             var stride = width * 3;

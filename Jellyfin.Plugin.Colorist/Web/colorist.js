@@ -33,7 +33,10 @@
     'use strict';
 
     var DISPLAY_HEIGHT = 90;
-    var SMOOTH = false;
+    var STYLE = 'stripes';
+    var GRADIENT_BANDS = 16;
+    var HEAD_TRIM = 0.5;
+    var TAIL_TRIM = 4;
 
     var CONTAINER_ID = 'colorist-strip';
     var inFlight = null;
@@ -152,6 +155,73 @@
      * reject the whole declaration, which leaves backgroundImage empty and is how
      * the fallback below detects them.
      */
+    /*
+     * Averages the samples down to a few bands, in linear light.
+     *
+     * This is what makes the gradient style a gradient. Blending a thousand samples
+     * still reproduces all thousand — each at its own position — so the strip keeps a
+     * visible band per cut however smooth the joins are; the detail has to be
+     * averaged away before anything is drawn.
+     *
+     * Linear light rather than Oklab, matching Core's ColourBands exactly, so the
+     * strip and the optional PNG are the same picture. Averaging combines light and
+     * light adds linearly, which Oklab is not built for — and it needs only the sRGB
+     * transfer function, so no second copy of the Oklab matrices comes into the
+     * browser. Averaging the encoded bytes instead is the usual downscaling bug and
+     * darkens everything: half black and half white would come out 128 rather than
+     * the 188 that reflects half the light.
+     */
+    function toLinear(channel) {
+        var c = channel / 255;
+        return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    function fromLinear(linear) {
+        var v = linear <= 0.0031308
+            ? linear * 12.92
+            : (1.055 * Math.pow(linear, 1 / 2.4)) - 0.055;
+
+        return Math.max(0, Math.min(255, Math.round(v * 255)));
+    }
+
+    function reduceToBands(colours, bands) {
+        if (!(bands >= 1) || colours.length <= bands) {
+            return colours;
+        }
+
+        var reduced = new Array(bands);
+
+        for (var band = 0; band < bands; band++) {
+            // From the band index rather than by accumulating a step, so the last band
+            // ends exactly on the last sample whether or not the count divides evenly.
+            var from = Math.floor((band * colours.length) / bands);
+            var to = Math.max(from + 1, Math.floor(((band + 1) * colours.length) / bands));
+            var r = 0;
+            var g = 0;
+            var b = 0;
+
+            for (var i = from; i < to; i++) {
+                var packed = parseInt(colours[i], 16);
+
+                r += toLinear((packed >> 16) & 0xFF);
+                g += toLinear((packed >> 8) & 0xFF);
+                b += toLinear(packed & 0xFF);
+            }
+
+            var count = to - from;
+
+            reduced[band] = hex(fromLinear(r / count))
+                + hex(fromLinear(g / count))
+                + hex(fromLinear(b / count));
+        }
+
+        return reduced;
+    }
+
+    function hex(value) {
+        return (value < 16 ? '0' : '') + value.toString(16);
+    }
+
     function paintGradient(colours) {
         var element = document.createElement('div');
         var stops = [];
@@ -269,8 +339,207 @@
         }
     }
 
+    /*
+     * Where the strip's left and right edges fall in the runtime.
+     *
+     * Reproduces SamplePlanner, because the strip covers the sampled window rather
+     * than the whole film: with the default trims the left edge is half a percent in
+     * and the right edge four percent from the end, so reading the bar as 0 to
+     * runtime would put every hover several minutes out on a feature.
+     *
+     * The trims are the ones configured now, not necessarily the ones in force when
+     * this item was sampled — the stored file holds colours and nothing else. Change
+     * them without regenerating and the readout drifts by the difference; regenerating
+     * puts it back. Worth knowing, and still far closer than ignoring them.
+     */
+    function sampledWindow(runtimeSeconds) {
+        if (!(runtimeSeconds > 0)) {
+            return null;
+        }
+
+        var head = Math.min(40, Math.max(0, HEAD_TRIM));
+        var tail = Math.min(40, Math.max(0, TAIL_TRIM));
+
+        if (head + tail > 80) {
+            var scale = 80 / (head + tail);
+            head *= scale;
+            tail *= scale;
+        }
+
+        var start = runtimeSeconds * (head / 100);
+        var end = runtimeSeconds * (1 - (tail / 100));
+
+        // The planner's own escape hatch: a window too short to be worth sampling is
+        // abandoned for the whole runtime, so trims of 40/40 on a two-minute extra
+        // must map the same way here or the readout would be wrong on exactly the
+        // items where the trims matter most.
+        if (end - start < 5) {
+            start = 0;
+            end = runtimeSeconds;
+        }
+
+        return { start: start, end: end };
+    }
+
+    function twoDigits(value) {
+        return (value < 10 ? '0' : '') + value;
+    }
+
+    function clockOf(seconds) {
+        var whole = Math.max(0, Math.floor(seconds));
+        var hours = Math.floor(whole / 3600);
+        var minutes = Math.floor((whole % 3600) / 60);
+
+        return (hours > 0 ? hours + ':' + twoDigits(minutes) : String(minutes))
+            + ':' + twoDigits(whole % 60);
+    }
+
+    /*
+     * The item's runtime, fetched at most once per item and only when somebody
+     * actually hovers the strip.
+     *
+     * Deliberately not part of drawing it. The colours arrive in one request that a
+     * revalidating ETag usually answers with a 304, and adding a second request to
+     * every detail page — for a number only used if a pointer arrives — would be a
+     * poor trade. A cached miss is remembered as 0 so a server that will not answer is
+     * asked once rather than on every mouse move.
+     */
+    var runtimes = {};
+
+    function runtimeFor(itemId) {
+        if (Object.prototype.hasOwnProperty.call(runtimes, itemId)) {
+            return Promise.resolve(runtimes[itemId]);
+        }
+
+        var client = window.ApiClient;
+
+        if (!client || typeof client.getItem !== 'function'
+            || typeof client.getCurrentUserId !== 'function') {
+            runtimes[itemId] = 0;
+            return Promise.resolve(0);
+        }
+
+        return client.getItem(client.getCurrentUserId(), itemId).then(function (item) {
+            // Ticks are 100-nanosecond units, so ten million to the second.
+            var seconds = item && item.RunTimeTicks ? item.RunTimeTicks / 10000000 : 0;
+
+            runtimes[itemId] = seconds;
+            return seconds;
+        }, function () {
+            runtimes[itemId] = 0;
+            return 0;
+        });
+    }
+
+    /*
+     * The hover readout: where in the film the colour under the pointer came from.
+     *
+     * Built rather than left to the title attribute, which cannot follow a pointer —
+     * a native tooltip is placed once and would answer for wherever the mouse first
+     * stopped. Both nodes are ours and are pointer-events: none, so nothing here can
+     * intercept a click meant for the page.
+     */
+    function attachReadout(container, itemId) {
+        var line = document.createElement('div');
+        line.style.cssText = [
+            'position: absolute',
+            'top: 0',
+            'bottom: 0',
+            'width: 1px',
+            'background: rgba(255,255,255,0.75)',
+            'box-shadow: 0 0 2px rgba(0,0,0,0.6)',
+            'pointer-events: none',
+            'display: none'
+        ].join(';');
+
+        var label = document.createElement('div');
+        label.style.cssText = [
+            'position: absolute',
+            'top: 50%',
+            'transform: translate(-50%, -50%)',
+            'padding: 0.25em 0.5em',
+            'border-radius: 0.25em',
+            'background: rgba(0,0,0,0.72)',
+            'color: #fff',
+            'font-size: 0.82rem',
+            'line-height: 1.3',
+            'font-variant-numeric: tabular-nums',
+            'white-space: nowrap',
+            'pointer-events: none',
+            'display: none'
+        ].join(';');
+
+        container.appendChild(line);
+        container.appendChild(label);
+
+        // Resolved once on the way in, so a mouse move is arithmetic and two layout
+        // reads rather than a promise per pixel. Null until it arrives, which is the
+        // first fraction of a second of the first hover and nothing after that.
+        var span = null;
+
+        function hide() {
+            line.style.display = 'none';
+            label.style.display = 'none';
+        }
+
+        function enter() {
+            runtimeFor(itemId).then(function (runtimeSeconds) {
+                span = sampledWindow(runtimeSeconds);
+
+                // The descriptive title would otherwise pop up over the readout a
+                // second into every hover. Dropped only once there is something better
+                // to say: a server that will not give up a runtime keeps it.
+                if (span) {
+                    container.removeAttribute('title');
+                }
+            }, function () {
+                span = null;
+            });
+        }
+
+        function place(event) {
+            if (!span) {
+                // No runtime to map onto — either still arriving, or the server would
+                // not say. Leave the strip alone rather than show a percentage nobody
+                // asked for.
+                return;
+            }
+
+            var rect = container.getBoundingClientRect();
+
+            if (rect.width <= 0) {
+                hide();
+                return;
+            }
+
+            var x = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
+
+            label.textContent = clockOf(
+                span.start + ((x / rect.width) * (span.end - span.start)));
+
+            line.style.left = x + 'px';
+            line.style.display = 'block';
+            label.style.display = 'block';
+
+            // Kept inside the strip at both ends, so the readout is not clipped by the
+            // overflow that stops the bleed spilling sideways. Measured after the text
+            // is set, since that is what decides the width.
+            label.style.left = Math.min(
+                rect.width - (label.offsetWidth / 2) - 4,
+                Math.max((label.offsetWidth / 2) + 4, x)) + 'px';
+        }
+
+        container.addEventListener('mouseenter', safely(enter));
+        container.addEventListener('mousemove', safely(place));
+        container.addEventListener('mouseleave', safely(hide));
+    }
+
     function buildStrip(itemId, colours) {
-        var painted = SMOOTH ? paintGradient(colours) : paintCanvas(colours);
+        var painted = STYLE === 'stripes'
+            ? paintCanvas(colours)
+            : paintGradient(STYLE === 'gradient'
+                ? reduceToBands(colours, GRADIENT_BANDS)
+                : colours);
 
         if (!painted) {
             return null;
@@ -284,10 +553,13 @@
             'margin-top: 2.5em',
             'padding: 0',
             'line-height: 0',
-            'overflow: hidden'
+            'overflow: hidden',
+            // So the readout below positions against the strip rather than the page.
+            'position: relative'
         ].join(';');
 
         container.appendChild(painted);
+        attachReadout(container, itemId);
 
         return container;
     }
@@ -376,7 +648,9 @@
     function safely(fn) {
         return function () {
             try {
-                fn();
+                // Arguments forwarded, because the readout's handlers need the event.
+                // The schedule and resize callers pass none, so nothing changes there.
+                fn.apply(this, arguments);
             } catch (error) {
                 if (window.console && window.console.debug) {
                     window.console.debug('Colorist:', error);

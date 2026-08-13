@@ -313,7 +313,17 @@ namespace Jellyfin.Plugin.Colorist.Services
             var width = Math.Clamp(configuration.OutputWidth, 64, 8000);
             var height = Math.Clamp(configuration.OutputHeight, 16, 2000);
 
-            var pixels = BarcodeComposer.Compose(columns, width, height, configuration.Smooth);
+            // The PNG follows whatever the detail page is set to draw, gradient
+            // included, so the file in the folder is the strip somebody is looking at
+            // rather than a second interpretation of the same data.
+            var style = configuration.ResolveStyle();
+
+            var pixels = BarcodeComposer.Compose(
+                columns,
+                width,
+                height,
+                style != BarcodeStyle.Stripes,
+                style == BarcodeStyle.Gradient ? configuration.ResolveGradientBands() : 0);
 
             return PngWriter.Encode(pixels, width, height);
         }

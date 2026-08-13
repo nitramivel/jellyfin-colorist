@@ -47,7 +47,8 @@ as a plugin repository.
 Core/          pure, no I/O, no Jellyfin types — all of it unit tested
   Color/       Oklab, the three strategies, cluster scoring, the factory
   Sampling/    sample planning, ffmpeg argument construction, crop and pts parsing, binning
-  Imaging/     PNG writer (ZLibStream + CRC32), barcode composer — only for the optional PNG
+  Imaging/     PNG writer (ZLibStream + CRC32), barcode composer, band reduction for
+               the gradient style — the writer and composer only for the optional PNG
   Runs/        run log document shape, and RunEstimate (throughput → time left)
   BarcodeData  the stored format: pack, unpack, the JSON envelope
   CpuBudget    share of the machine → items in flight
@@ -90,8 +91,23 @@ run. `CurrentItem` is never persisted — it changes several times a second and 
 ever read from the snapshot.
 
 **Every button carries `is="emby-button" class="emby-button raised"` — including
-generated ones.** The class is written out deliberately, and that third piece is what
-two earlier attempts at "make these buttons match" were missing. **No CSS rule
+generated ones.** Write a new one exactly like this, from the start, and it will look
+like the rest of the dashboard:
+
+```html
+<button is="emby-button" type="button" id="ColoristSomething" class="emby-button raised">
+    <span>Do the thing</span>
+</button>
+```
+
+There are four on the settings page — Save, **Generate for the whole library**,
+**Build it** and **Delete saved barcodes** — plus the **Details** / **Hide** toggle
+built as a string in `renderRuns`, which needs the same three pieces despite never
+being touched by the upgrade. The class is written out deliberately, and that third
+piece is what two earlier attempts at "make these buttons match" were missing: both
+went after the attribute, one by adding it back and one by taking it away, and the
+three action buttons stayed bare either way while `Details` beside them looked
+correct. **No CSS rule
 anywhere matches the `is=` attribute.** Verified against the running 10.11 server's
 own stylesheets: `.emby-button` holds the entire geometry — `border:0`,
 `border-radius:.2em`, `padding:.9em 1em`, `font-family:inherit`, `font-size:inherit`,
@@ -116,10 +132,50 @@ click will do; `#ColoristDeleteAll.colArmed` needs `!important` on both backgrou
 *and* colour to beat such a theme, colour included or the theme's `:hover` writes dark
 text onto dark red.
 
+**A gradient is a reduction, not a smoother blend.** `Blended` interpolates every
+sample into its neighbour and still shows a band per cut, because each colour is
+reproduced exactly at its own position — no amount of softening the joins removes that.
+`Gradient` therefore *averages the detail away first*, to `GradientBands` colours
+(default 16), and interpolates between those. **The averaging is in linear light, not
+Oklab**, which inverts this codebase's usual rule and is deliberate: Oklab is for
+perceptual *distance* — interpolating along a straight line, measuring cluster
+separation — while a mean combines light, and light adds linearly. Averaging the
+encoded bytes is the classic downscaling bug and darkens (half black, half white gives
+128 rather than the 188 that reflects half the light). It also means the browser needs
+only the sRGB transfer function rather than a second copy of the Oklab matrices, so
+`ColourBands.Reduce` and `reduceToBands` in `colorist.js` agree byte for byte — pinned
+by `TheClientReducesToTheSameColoursThisDoes`, whose expected strings came from running
+the *JavaScript* under Node, not from running the C#.
+
+**`Style` is a nullable enum, and the old `Smooth` boolean is still read.** An enum
+cannot spell "not chosen", and its zero value here is `Stripes` — a real choice. Every
+configuration written before 0.4.0.0 has no `Style` element at all, so defaulting it
+would have read that absence as a deliberate request for hard stripes and silently
+turned blending off for everyone who had it on. Null means the question predates the
+setting, and `ResolveStyle()` is the one place that answers it from `Smooth`. The
+settings page writes both, so a downgrade still draws what was asked for.
+
+**The hover readout costs nothing until somebody hovers.** The time under the pointer
+needs the item's runtime, which is per-item and so cannot ride along with the injected
+script the way the height and the trims do. Fetching it while drawing would add a
+second request to every detail page for a number most visits never use, so
+`runtimeFor` is called on `mouseenter` and cached per item, with a failure remembered
+as 0 so a server that will not answer is asked once. The window is
+`sampledWindow`, which reproduces `SamplePlanner` — the strip covers the *sampled*
+window, so reading the bar as 0-to-runtime is several minutes out on a feature at the
+default trims. **The trims it uses are the ones configured now**, because the stored
+file holds colours and nothing else: change them without regenerating and the readout
+drifts by the difference. `HEAD_TRIM`/`TAIL_TRIM` are emitted through
+`CultureInfo.InvariantCulture`, or a comma-decimal server would serve
+`var HEAD_TRIM = 0,5;` — valid JavaScript that assigns 0 and would be found by nobody.
+
 **The tabs are the exception, and are not buttons in the emby sense.** Plain
 `<button class="colTab" role="tab">`, underlined when active — a tab labels which
 panel you are looking at rather than being a raised, pressable thing, and Jellyfin's
-button theming fights that. Same conclusion Curator reached.
+button theming fights that. Same conclusion Curator reached, and the values are
+Curator's exactly. The `border-bottom` on `.colTabs` is load-bearing rather than
+decoration: without a baseline for it to sit on, the active tab's 2px marker is a short
+line floating under one word and the bar stops reading as tabs at all.
 
 **Cancellation is caught around the dispatch loop, not just the await.**
 `GenerateBarcodesTask` spends its whole life inside `foreach`, because

@@ -412,14 +412,36 @@
                 <!-- ================= OUTPUT ================= -->
                 <div class="colPanel" data-panel="output">
 
-                    <label class="checkboxContainer">
-                        <input is="emby-checkbox" type="checkbox" id="Smooth" name="Smooth" />
-                        <span>Blend between stripes</span>
-                    </label>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="Style">Strip style</label>
+                        <select is="emby-select" id="Style" name="Style" class="emby-select-withcolor emby-select">
+                            <option value="Stripes">Stripes (hard edges)</option>
+                            <option value="Blended">Blended stripes</option>
+                            <option value="Gradient">Gradient across the whole strip</option>
+                        </select>
+                    </div>
                     <div class="fieldDescription colNote">
-                        Fades one stripe into the next instead of hard edges. Blending is done perceptually,
-                        so transitions do not pass through a dark seam the way naive blending does. Takes
-                        effect on the next page load &mdash; nothing needs regenerating.
+                        <strong>Stripes</strong> draws one hard-edged column per sample.
+                        <strong>Blended</strong> fades each column into the next; blending is perceptual, so
+                        transitions do not pass through the dark seam naive blending leaves. Both still show a
+                        band per cut, because every sample is reproduced at its own position.
+                        <strong>Gradient</strong> averages the samples down to the few bands below first, so the
+                        whole strip reads as one sweep of colour through the film rather than a thousand
+                        columns with soft joins. All three take effect on the next page load &mdash; nothing
+                        needs regenerating.
+                    </div>
+
+                    <div class="inputContainer" id="GradientBandsRow">
+                        <label class="inputLabel inputLabelUnfocused" for="GradientBands">Gradient bands</label>
+                        <input is="emby-input" type="number" id="GradientBands" name="GradientBands"
+                               min="2" max="4000" step="1" />
+                        <div class="fieldDescription">
+                            How many colours the gradient is built from. Sixteen puts each band around a
+                            hundred pixels wide on a full-width strip, which no eye reads as a band once the
+                            joins are interpolated. Fewer is a colour wash of the film; more keeps its shape,
+                            until somewhere past a hundred it converges on blended stripes and the bands become
+                            visible again.
+                        </div>
                     </div>
 
                     <label class="checkboxContainer">
@@ -720,6 +742,39 @@
             }
 
             /*
+             * The strip style, which is the same enum-by-name rule as the crop mode
+             * with one addition: null is a real answer here and means the setting
+             * predates this build, so the old Smooth checkbox decides. Getting that
+             * wrong would silently turn blending off for every server that had it on,
+             * because the enum's zero value is a genuine choice rather than "unset".
+             * Saving from this page writes a name and retires the boolean.
+             */
+            var STYLES = ['Stripes', 'Blended', 'Gradient'];
+
+            function styleName(value, smooth) {
+                if (value === null || value === undefined || value === '') {
+                    return smooth ? 'Blended' : 'Stripes';
+                }
+
+                var text = String(value);
+
+                if (/^\d+$/.test(text)) {
+                    return STYLES[parseInt(text, 10)] || 'Stripes';
+                }
+
+                return STYLES.indexOf(text) >= 0 ? text : 'Stripes';
+            }
+
+            /*
+             * The band count only means anything to the gradient, and a live control
+             * that does nothing is worse than one that is plainly not in play.
+             */
+            function syncStyleFields() {
+                var gradient = page.querySelector('#Style').value === 'Gradient';
+                page.querySelector('#GradientBandsRow').classList.toggle('hide', !gradient);
+            }
+
+            /*
              * Shows which plugin version is actually running.
              *
              * The point is not the number, it is that a page served from a browser
@@ -768,7 +823,9 @@
                     page.querySelector('#OutputHeight').value = config.OutputHeight;
                     page.querySelector('#WriteImageSidecar').checked = config.WriteImageSidecar;
                     page.querySelector('#DeleteImagesOnly').checked = config.DeleteImagesOnly;
-                    page.querySelector('#Smooth').checked = config.Smooth;
+                    page.querySelector('#Style').value = styleName(config.Style, config.Smooth);
+                    page.querySelector('#GradientBands').value =
+                        config.GradientBands === undefined ? 16 : config.GradientBands;
                     page.querySelector('#WriteBesideMedia').checked = config.WriteBesideMedia;
                     page.querySelector('#ShowOnDetailPage').checked = config.ShowOnDetailPage;
                     page.querySelector('#DisplayHeight').value = config.DisplayHeight;
@@ -782,6 +839,7 @@
                     page.querySelector('#FfmpegThreads').value = config.FfmpegThreads;
 
                     syncCropFields();
+                    syncStyleFields();
                     syncCpuBudget();
                     Dashboard.hideLoadingMsg();
                 });
@@ -822,7 +880,14 @@
                     config.OutputHeight = numberOf('#OutputHeight', 240);
                     config.WriteImageSidecar = page.querySelector('#WriteImageSidecar').checked;
                     config.DeleteImagesOnly = page.querySelector('#DeleteImagesOnly').checked;
-                    config.Smooth = page.querySelector('#Smooth').checked;
+                    config.Style = page.querySelector('#Style').value;
+                    config.GradientBands = numberOf('#GradientBands', 16);
+
+                    // Kept in step so a downgrade to a build that only knows the
+                    // boolean still draws what was asked for here. Nothing in this
+                    // version reads it once Style is set.
+                    config.Smooth = config.Style !== 'Stripes';
+
                     config.WriteBesideMedia = page.querySelector('#WriteBesideMedia').checked;
                     config.ShowOnDetailPage = page.querySelector('#ShowOnDetailPage').checked;
                     config.DisplayHeight = numberOf('#DisplayHeight', 90);
@@ -869,6 +934,7 @@
             });
 
             page.querySelector('#CropMode').addEventListener('change', syncCropFields);
+            page.querySelector('#Style').addEventListener('change', syncStyleFields);
 
             // input, not change: the number has to follow the thumb while it is
             // being dragged, or the control reads as broken.
